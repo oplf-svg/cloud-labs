@@ -1,0 +1,10 @@
+node_modules/
+dist/
+out/
+.astro/
+.angular/
+pages/public/builds/
+pages/src/data/builds.json
+playwright-report/
+test-results/
+.DS_Store

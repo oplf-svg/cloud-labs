@@ -1,0 +1,19 @@
+---
+import NoteRows from "../../../components/NoteRows.astro";
+import Page from "../../../layouts/Page.astro";
+import { everyLang } from "../../../text/paths.ts";
+import { WORDS } from "../../../text/recordings.ts";
+import type { Lang } from "../../../text/types.ts";
+
+export const getStaticPaths = everyLang;
+const { lang } = Astro.props as { lang: Lang };
+const { notes } = WORDS[lang];
+---
+
+<Page lang={lang} path="/notes/" title={notes.title} description={notes.lead}>
+  <div class="wide page-head">
+    <h1>{notes.title}</h1>
+    <p class="lead">{notes.lead}</p>
+  </div>
+  <div class="wide"><NoteRows lang={lang} /></div>
+</Page>

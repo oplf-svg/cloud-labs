@@ -1,0 +1,122 @@
+---
+import { HEIGHT, WIDTH, place, rest, swing } from "@recorder/core";
+import "@recorder/core/recorder.css";
+import CheckList from "../../components/CheckList.astro";
+import NoteRows from "../../components/NoteRows.astro";
+import Part from "../../components/Part.astro";
+import sizes from "../../data/builds.json";
+import Page from "../../layouts/Page.astro";
+import { CLAIMS } from "../../text/claims.ts";
+import { everyLang, to } from "../../text/paths.ts";
+import { LATEST, WORDS, recorderData, wrongIn } from "../../text/recordings.ts";
+import { DOORS, STATUSES, type Door, type Lang, type Status } from "../../text/types.ts";
+
+export const getStaticPaths = everyLang;
+const { lang } = Astro.props as { lang: Lang };
+const words = WORDS[lang];
+const { recorder, score, doors } = words;
+const builds = [["angular", "Angular"], ["react", "React"]] as const;
+const kilobytes = (bytes: number) => new Intl.NumberFormat(lang, { maximumFractionDigits: 0 }).format(bytes / 1024);
+const count = (door: Door) =>
+  doors.count(Object.fromEntries(STATUSES.map((status) => [status, CLAIMS.filter((claim) => claim.status === status && claim.doors.includes(door)).length])) as Record<Status, number>);
+// The line under the headline is the first real run, drawn with one pen.
+const all = recorderData(lang);
+const first = all.recordings.find((recording) => recording.id === "first")!;
+const wrong = first.marks.find((mark) => mark.kind === "wrong")!;
+// "<" cannot end the script element early once it is escaped.
+const data = JSON.stringify(all).replaceAll("<", "\\u003c");
+---
+
+<Page lang={lang} path="/">
+  <div class="hero">
+    <div class="wide">
+      <h1><span class="quiet">{words.hero.quiet}</span> <span class="loud">{words.hero.loud}</span></h1>
+      <p class="lead">{words.hero.lead}</p>
+      <div class="actions">
+        <a class="button first" href={to(lang, "/proof/")}>{words.hero.proof}</a>
+        <a class="button" href={to(lang, "/how/")}>{words.hero.how}</a>
+      </div>
+    </div>
+    <svg class="trace" viewBox={`0 0 ${WIDTH} ${HEIGHT}`} preserveAspectRatio="none" aria-hidden="true">
+      <path class="rest" d={rest("hero")}></path>
+      {first.marks.map((mark) => <path class={`k-${mark.kind}`} d={swing(mark.kind, mark.at, first.length)}></path>)}
+    </svg>
+    <svg class="flags" width="100%">
+      <foreignObject x="0" y="0" width={`${Math.round(place(wrong.at, first.length) * 1000) / 10}%`} height="100%">
+        <p class="flag"><a href={to(lang, "/notes/the-check-that-proved-nothing/")}>{words.hero.flag}</a></p>
+      </foreignObject>
+    </svg>
+  </div>
+
+  <Part id="recorder-title" title={recorder.title} lead={recorder.lead}>
+    <div>
+      <fieldset class="switch" id="builds" hidden>
+        <legend>{recorder.builtWith}</legend>
+        {builds.map(([id, name]) => (
+          <label><input type="radio" name="build" value={id} data-kb={kilobytes(sizes[id])} />{name}</label>
+        ))}
+        <output id="measured" data-text={recorder.measured}></output>
+      </fieldset>
+      <div class="stage" id="stage" data-failed={recorder.failed}>
+        <noscript><p>{recorder.needsScript}</p></noscript>
+      </div>
+      <script type="application/json" id="recorder-data" set:html={data} is:inline />
+      <details>
+        <summary>{recorder.list}: {recorder.latest}</summary>
+        <CheckList lang={lang} run={LATEST} />
+        <p class="after"><a href={`${to(lang, "/proof/")}#runs`}>{recorder.runs}</a></p>
+      </details>
+    </div>
+  </Part>
+
+  <Part id="score-title" title={score.title} lead={score.lead}>
+    <div>
+      <table class="stack">
+        <thead>
+          <tr>
+            <th scope="col">{score.cloud}</th><th scope="col">{score.checks}</th><th scope="col">{score.in}</th><th scope="col">{score.refused}</th>
+            <th scope="col">{score.empty}</th><th scope="col">{score.wrong}</th><th scope="col">GitHub</th>
+          </tr>
+        </thead>
+        <tbody>
+          {LATEST.lanes.map((lane) => {
+            const checks = LATEST.checks.filter((check) => check.lane === lane.id);
+            const got = (...kinds: string[]) => checks.filter((check) => kinds.includes(check.got)).length;
+            return (
+              <tr>
+                <th scope="row">{lane.name}</th>
+                <td class="num" data-label={score.checks}>{checks.length}</td>
+                <td class="num" data-label={score.in}>{got("allowed", "yes")}</td>
+                <td class="num" data-label={score.refused}>{got("denied")}</td>
+                <td class="num" data-label={score.empty}>{got("nothing there")}</td>
+                <td class={`num big ${wrongIn(checks) ? "k-wrong" : "k-refused"}`} data-label={score.wrong}>{wrongIn(checks)}</td>
+                <td data-label="GitHub"><a href={lane.url} aria-label={`${score.open}: ${lane.name}`}>{score.open}</a></td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <p class="quiet-text after">{score.note}</p>
+    </div>
+  </Part>
+
+  <Part id="doors-title" title={doors.title} lead={doors.lead}>
+    <ul class="rows">
+      {DOORS.map((door) => (
+        <li>
+          <a class="row" href={`${to(lang, "/proof/")}?for=${door}`}>
+            <span class="name">{doors.names[door]}</span><span>{doors.lines[door]}</span><span class="count">{count(door)}</span>
+          </a>
+        </li>
+      ))}
+    </ul>
+  </Part>
+
+  <Part id="notes-title" title={words.notes.title} lead={words.notes.lead}>
+    <NoteRows lang={lang} />
+  </Part>
+</Page>
+
+<script>
+  import "../../scripts/stage.ts";
+</script>

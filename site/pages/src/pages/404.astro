@@ -1,0 +1,16 @@
+---
+import Page from "../layouts/Page.astro";
+import { to } from "../text/paths.ts";
+import { WORDS } from "../text/recordings.ts";
+import { LANGS } from "../text/types.ts";
+
+const [first, ...others] = LANGS;
+---
+
+<Page lang={first} path="/" title={WORDS[first].missing.title}>
+  <div class="wide page-head">
+    <h1>{WORDS[first].missing.title}</h1>
+    <p class="lead">{WORDS[first].missing.text} <a href={to(first)}>{WORDS[first].missing.back}</a></p>
+    {others.map((lang) => <p lang={lang} class="far">{WORDS[lang].missing.title}. {WORDS[lang].missing.text} <a href={to(lang)}>{WORDS[lang].missing.back}</a></p>)}
+  </div>
+</Page>

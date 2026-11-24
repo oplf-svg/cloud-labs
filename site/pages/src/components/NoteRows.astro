@@ -1,0 +1,18 @@
+---
+import { NOTES } from "../text/notes.ts";
+import { day, to } from "../text/paths.ts";
+import type { Lang } from "../text/types.ts";
+
+const { lang } = Astro.props as { lang: Lang };
+---
+
+<ul class="rows notes">
+  {NOTES.map((note) => (
+    <li>
+      <a class="row" href={to(lang, `/notes/${note.slug}/`)}>
+        <span class="date">{day(lang, note.date)}</span>
+        <span><span class="name">{note.title[lang]}</span><span class="quiet-text">{note.summary[lang]}</span></span>
+      </a>
+    </li>
+  ))}
+</ul>

@@ -1,0 +1,28 @@
+{
+  "name": "site",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "pages"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build:recorders": "npm run build -w recorder-react && npm run build -w recorder-angular && node scripts/collect-builds.mjs",
+    "build": "npm run build:recorders && npm run build -w pages",
+    "dev": "npm run build:recorders && npm run dev -w pages",
+    "preview": "npm run preview -w pages",
+    "check": "npm run check -w pages",
+    "test": "vitest run",
+    "e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.14.0",
+    "@playwright/test": "1.65.1",
+    "@types/node": "24.19.2",
+    "typescript": "5.9.3",
+    "vitest": "4.1.12"
+  }
+}

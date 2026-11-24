@@ -1,0 +1,6 @@
+{
+  "extends": "astro/tsconfigs/strict",
+  "compilerOptions": { "allowImportingTsExtensions": true, "noUncheckedIndexedAccess": true, "paths": { "@recorder/core": ["../packages/core/src/index.ts"] } },
+  "include": [".astro/types.d.ts", "src", "test"],
+  "exclude": ["dist"]
+}
