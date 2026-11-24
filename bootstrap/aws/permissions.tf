@@ -319,6 +319,10 @@ resource "aws_iam_policy" "read_extras" {
           "scheduler:GetSchedule",
           "scheduler:GetScheduleGroup",
           "servicediscovery:GetNamespace",
+          "servicediscovery:GetOperation",
+          "servicediscovery:GetService",
+          "servicediscovery:ListInstances",
+          "servicediscovery:ListTagsForResource",
           "states:ValidateStateMachineDefinition",
         ], var.plan_extra)
         Resource = "*"
