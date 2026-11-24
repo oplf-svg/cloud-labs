@@ -323,6 +323,14 @@ class Run(unittest.TestCase):
             self.assertEqual(self.out.count("another"), 2)
             self.assertEqual(self.go(cloud, bucket="tfstate-0a1b2c3d", outputs_only=True, repos={"cloud-labs": {}}), 0, self.out)
             self.assertNotIn("environment cost", self.out)
+            # On a Mac too, and also the second time, when nothing is new: the window may have been closed too early.
+            for conf in ({"total": EXPECTED[cloud] + 2}, {}):
+                (self.box / "applied").unlink(missing_ok=True)
+                self.assertEqual(self.there(cloud, env={"RUN_RESULTS": str(self.box / "results")}, repos=repos, **conf), 0, self.out)
+                self.assertIn(f"environment cost:\n\n  {names[cloud]} = the-one\n", self.out)
+                self.assertEqual("Nothing new" in self.out, not conf)
+                self.assertEqual(self.out.count("another"), 0 if not conf else 2)
+                self.assertNotIn("the-one", "".join(self.result()))
 
     def test_carries_out_a_later_change(self):
         # As when plan came to trust another subject: everything is there already, and some of it changes in place.

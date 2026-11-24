@@ -452,8 +452,13 @@ fi
 
 ending=ok
 step "For GitHub"
+# The one for the costs by itself, every time. It can be typed into GitHub's page where the clipboard does not reach.
+cost=$(terraform output -json github_secrets | jq -r '.repos["cloud-labs"].cost // {} | to_entries[] | "\(.key) = \(.value)"')
+if [ -n "$cost" ]; then
+  printf 'For the settings of cloud-labs, environment cost:\n\n  %s\n\n' "$cost"
+fi
 if [ "$system" = Darwin ] && [ "$new" = no ]; then
-  echo "Nothing new: GitHub has these ids already."
+  echo "Nothing new: GitHub has all the ids already."
   exit 0
 fi
 cat << 'EOF'
@@ -466,8 +471,3 @@ echo "--------------------------------------------------"
 terraform output -json github_secrets | fold -w 100
 echo
 echo "--------------------------------------------------"
-# The one for the costs by itself. It can be typed into GitHub's page where the clipboard of that computer does not reach.
-cost=$(terraform output -json github_secrets | jq -r '.repos["cloud-labs"].cost // {} | to_entries[] | "\(.key) = \(.value)"')
-if [ -n "$cost" ]; then
-  printf '\nIt also holds this one, for the settings of cloud-labs, environment cost:\n\n  %s\n' "$cost"
-fi
