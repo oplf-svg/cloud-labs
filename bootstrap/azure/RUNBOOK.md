@@ -8,7 +8,21 @@ Run once, as Owner of the subscription, in Cloud Shell. Nothing here needs a key
 | | 1 resource group for the bootstrap, locked against deletion, and 1 empty one per repo | Free |
 | | 1 storage account for state, 6 containers: encrypted, versioned, no public access, no keys | Under 0.05 USD a month |
 
-## Run it
+## The short way
+
+Open the Azure portal, start **Cloud Shell** and choose **Bash**. This does every step below. It shows the plan and asks
+before it creates anything, and it can be run again if it stops.
+
+```bash
+[ -d ~/cloud-labs ] || git clone https://github.com/oplf-svg/cloud-labs.git ~/cloud-labs; git -C ~/cloud-labs pull --ff-only && ~/cloud-labs/bootstrap/scripts/run.sh azure
+```
+
+Keep the window open until it has finished: a session without storage forgets its files when closed.
+
+Then follow [Hand it to GitHub](#hand-it-to-github). The rest of this page is for checking, changing and undoing it, or
+for doing it by hand.
+
+## Run it by hand
 
 1. Open the Azure portal, start **Cloud Shell** and choose **Bash**. If it asks, choose **No storage account required**.
    Such a session forgets its files when closed, so do steps 6 to 8 without closing it.
@@ -86,6 +100,22 @@ The storage account: `public` and `keys` are `false`, `tls` is `TLS1_2`, and `ve
 ```bash
 A=$(terraform output -raw state_bucket); az storage account show -n "$A" --query '{public:allowBlobPublicAccess, keys:allowSharedKeyAccess, tls:minimumTlsVersion, encryption:encryption.keySource}'; az storage account blob-service-properties show -n "$A" -g rg-github-bootstrap --query '{versioning:isVersioningEnabled, softDeleteDays:deleteRetentionPolicy.days}'
 ```
+
+## Hand it to GitHub
+
+This prints what the repos need: ids and names, no passwords. Copy all of it. `run.sh` prints it too.
+
+```bash
+terraform output -json github_secrets | fold -w 100; echo
+```
+
+On your own computer, in your clone of this repo, with that in the clipboard:
+
+```bash
+pbpaste | python3 bootstrap/scripts/load_secrets.py
+```
+
+It checks every value, lists the names it will set, never shows a value, and asks before it writes.
 
 ## Run it again later
 

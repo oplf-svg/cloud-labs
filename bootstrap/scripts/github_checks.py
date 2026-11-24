@@ -144,7 +144,7 @@ def main(argv=None, fetch=get):
         except LimitReached:
             print("GitHub refused: anonymous requests are limited to 60 an hour per address, and a Cloud Shell")
             print("shares its address. Wait, or run this on your own computer. It needs only Python 3.")
-            return 1
+            return 3
         except (urllib.error.URLError, TimeoutError) as error:
             problems = [f"could not be checked: {error}"]
         failed = failed or bool(problems)

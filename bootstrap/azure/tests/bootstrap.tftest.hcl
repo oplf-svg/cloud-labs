@@ -207,6 +207,34 @@ run "state" {
   }
 }
 
+run "github_secrets" {
+  command = apply
+
+  assert {
+    condition = output.github_secrets == {
+      cloud = "azure"
+      repos = {
+        for repo, id in var.repo_ids : repo => {
+          repository = {
+            AZURE_CLIENT_ID       = azurerm_user_assigned_identity.ci["${repo}/plan"].client_id
+            AZURE_STATE_ACCOUNT   = "tfstate0a1b2c3d"
+            AZURE_SUBSCRIPTION_ID = "00000000-0000-0000-0000-000000000000"
+            AZURE_TENANT_ID       = "00000000-0000-0000-0000-00000000000b"
+          }
+          production      = { AZURE_CLIENT_ID = azurerm_user_assigned_identity.ci["${repo}/apply"].client_id }
+          nightly-destroy = { AZURE_CLIENT_ID = azurerm_user_assigned_identity.ci["${repo}/destroy"].client_id }
+        }
+      }
+    }
+    error_message = "Each environment must get its own tier's identity, and other jobs the plan identity."
+  }
+
+  assert {
+    condition     = length(distinct([for identity in azurerm_user_assigned_identity.ci : identity.client_id])) == 15
+    error_message = "The comparison above needs 15 different identities."
+  }
+}
+
 run "rejects_a_wrong_subscription_id" {
   command         = plan
   expect_failures = [var.subscription_id]

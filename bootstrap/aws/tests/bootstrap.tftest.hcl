@@ -196,6 +196,34 @@ run "state" {
   }
 }
 
+run "github_secrets" {
+  command = apply
+
+  assert {
+    condition = output.github_secrets == {
+      cloud = "aws"
+      repos = {
+        for repo, id in var.repo_ids : repo => {
+          repository = {
+            AWS_ACCOUNT_ID            = "111122223333"
+            AWS_ROLE_ARN              = aws_iam_role.ci["${repo}/plan"].arn
+            AWS_STATE_BUCKET          = "tfstate-0a1b2c3d"
+            AWS_WORKLOAD_BOUNDARY_ARN = aws_iam_policy.workload_boundary.arn
+          }
+          production      = { AWS_ROLE_ARN = aws_iam_role.ci["${repo}/apply"].arn }
+          nightly-destroy = { AWS_ROLE_ARN = aws_iam_role.ci["${repo}/destroy"].arn }
+        }
+      }
+    }
+    error_message = "Each environment must get its own tier's role, and other jobs the plan role."
+  }
+
+  assert {
+    condition     = length(distinct([for role in aws_iam_role.ci : role.arn])) == 15
+    error_message = "The comparison above needs 15 different roles."
+  }
+}
+
 run "rejects_a_wrong_account_id" {
   command         = plan
   expect_failures = [var.account_id]

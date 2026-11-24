@@ -152,7 +152,7 @@ class Main(unittest.TestCase):
             raise checks.LimitReached
 
         with contextlib.redirect_stdout(io.StringIO()) as out:
-            self.assertEqual(checks.main(["environments"], fetch=refuse), 1)
+            self.assertEqual(checks.main(["environments"], fetch=refuse), 3)
         self.assertNotIn("ok", out.getvalue().split())
 
     def test_unknown_repo(self):

@@ -1,0 +1,321 @@
+#!/usr/bin/env bash
+# Runs one bootstrap from start to finish in that cloud's Cloud Shell.
+#
+#   run.sh aws | azure | gcp
+#
+# It shows the plan and asks before it creates anything, and stops if the plan is not the expected
+# one or would delete something. It can be run again at any time: it continues where an earlier run
+# stopped. The runbook next to each stack explains every step.
+#
+# The functions are called by name, as "${cloud}_setup", which shellcheck cannot see.
+# shellcheck disable=SC2317,SC2329
+set -euo pipefail
+
+cloud=${1:-}
+case "$cloud" in
+  aws) expected=104 ;;
+  azure) expected=91 ;;
+  gcp) expected=45 ;;
+  *)
+    echo "usage: run.sh aws | azure | gcp" >&2
+    exit 2
+    ;;
+esac
+
+scripts=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+cd "$scripts/../$cloud"
+work=${RUN_TMP:-/tmp}
+trap 'rm -f tfplan' EXIT
+
+step() { printf '\n== %s\n' "$*"; }
+
+stop() {
+  printf '\nSTOPPED: %s\n' "$*" >&2
+  exit 1
+}
+
+confirm() {
+  local answer=""
+  printf '\n%s\nType yes to go on: ' "$1"
+  read -r answer < "${RUN_TERMINAL:-/dev/tty}" || true
+  [ "$answer" = yes ]
+}
+
+ask() {
+  local answer=""
+  printf '%s' "$1" >&2
+  read -r answer < "${RUN_TERMINAL:-/dev/tty}" || true
+  printf '%s' "$answer"
+}
+
+# ---- What differs per cloud ----------------------------------------------------------------------
+# <cloud>_setup     signs in, sets the variables, "where" and "bucket" (empty if there is none yet)
+# <cloud>_fresh     checks that nothing is in the way of a first run
+# <cloud>_has_state true if the bucket already holds this stack's state
+# <cloud>_backend   prints the backend block for that bucket
+# <cloud>_subjects  prints every subject the cloud trusts
+# <cloud>_last      a last check of its own
+
+where=""
+bucket=""
+
+aws_setup() {
+  local identity
+  identity=$(aws sts get-caller-identity --query Arn --output text) || stop "AWS does not answer. Are you signed in?"
+  TF_VAR_account_id=$(aws sts get-caller-identity --query Account --output text)
+  export TF_VAR_account_id
+  where="AWS account $TF_VAR_account_id, signed in as $identity"
+  bucket=$(aws s3api list-buckets --query "Buckets[?starts_with(Name, 'tfstate-')].Name | [0]" --output text)
+  if [ "$bucket" = None ]; then bucket=""; fi
+}
+
+aws_fresh() {
+  if aws iam list-open-id-connect-providers --output text | grep -q token.actions.githubusercontent.com; then
+    stop "This account already trusts GitHub, but there is no state bucket. See step 5 of the runbook."
+  fi
+}
+
+aws_has_state() {
+  aws s3api head-object --bucket "$bucket" --key bootstrap/terraform.tfstate > /dev/null 2>&1
+}
+
+aws_backend() {
+  cat << EOF
+terraform {
+  backend "s3" {
+    bucket       = "$bucket"
+    key          = "bootstrap/terraform.tfstate"
+    region       = "eu-west-2"
+    encrypt      = true
+    use_lockfile = true
+  }
+}
+EOF
+}
+
+aws_subjects() {
+  aws iam list-roles --output json | jq -r '.Roles[].AssumeRolePolicyDocument.Statement
+    | if type == "array" then .[] else . end
+    | select(tostring | contains("token.actions.githubusercontent.com"))
+    | .Condition.StringEquals["token.actions.githubusercontent.com:sub"] // "a role without one exact subject"'
+}
+
+aws_last() { :; }
+
+azure_setup() {
+  local name user
+  name=$(az account show --query name --output tsv) || stop "Azure does not answer. Run az login and start again."
+  user=$(az account show --query user.name --output tsv)
+  TF_VAR_subscription_id=$(az account show --query id --output tsv)
+  export TF_VAR_subscription_id
+  where="Azure subscription \"$name\", signed in as $user"
+  bucket=$(az storage account list --resource-group rg-github-bootstrap --query '[0].name' --output tsv 2> /dev/null || true)
+}
+
+azure_fresh() {
+  if [ "$(az group exists --name rg-github-bootstrap)" = true ]; then
+    stop "An earlier run was cut off and its state is gone, so this cannot continue safely. See the runbook."
+  fi
+}
+
+azure_has_state() {
+  [ "$(az storage blob exists --account-name "$bucket" --container-name bootstrap --name terraform.tfstate --auth-mode login --query exists --output tsv 2> /dev/null)" = true ]
+}
+
+azure_backend() {
+  cat << EOF
+terraform {
+  backend "azurerm" {
+    storage_account_name = "$bucket"
+    container_name       = "bootstrap"
+    key                  = "terraform.tfstate"
+    use_azuread_auth     = true
+    use_cli              = true
+  }
+}
+EOF
+}
+
+azure_subjects() {
+  local identity
+  for identity in $(az identity list --resource-group rg-github-bootstrap --query '[].name' --output tsv); do
+    az identity federated-credential list --resource-group rg-github-bootstrap --identity-name "$identity" --query '[].subject' --output tsv
+  done
+}
+
+azure_last() { :; }
+
+gcp_editors() {
+  gcloud projects get-iam-policy "$TF_VAR_project_id" --flatten='bindings[].members' --filter='bindings.role=roles/editor' \
+    --format='value(bindings.members)' | grep '^serviceAccount:' | grep -v '@cloudservices.gserviceaccount.com$' || true
+}
+
+gcp_last() {
+  local editors
+  editors=$(gcp_editors)
+  [ -z "$editors" ] || stop "These accounts have Editor again, see step 6 of the runbook: $editors"
+}
+
+gcp_setup() {
+  local project number account
+  TF_VAR_project_id=${TF_VAR_project_id:-$(ask "Id of the project that the repos deploy into: ")}
+  TF_VAR_bootstrap_project_id=${TF_VAR_bootstrap_project_id:-$(ask "Id of the other, empty project for the trust and the state: ")}
+  export TF_VAR_project_id TF_VAR_bootstrap_project_id
+  [ "$TF_VAR_project_id" != "$TF_VAR_bootstrap_project_id" ] || stop "These have to be two different projects."
+
+  for project in "$TF_VAR_project_id" "$TF_VAR_bootstrap_project_id"; do
+    if [ "$(gcloud billing projects describe "$project" --format='value(billingEnabled)')" != True ]; then
+      stop "Project $project does not exist or is not linked to billing. See step 4 of the runbook."
+    fi
+  done
+  where="Google Cloud projects $TF_VAR_project_id and $TF_VAR_bootstrap_project_id"
+
+  confirm "This turns on the Google APIs the bootstrap needs, and takes the Editor role away from the default service account of $TF_VAR_project_id." || stop "Nothing was changed."
+  gcloud services enable cloudresourcemanager.googleapis.com iam.googleapis.com storage.googleapis.com sts.googleapis.com --project "$TF_VAR_bootstrap_project_id"
+  gcloud services enable cloudresourcemanager.googleapis.com compute.googleapis.com iam.googleapis.com serviceusage.googleapis.com --project "$TF_VAR_project_id"
+  number=$(gcloud projects describe "$TF_VAR_project_id" --format='value(projectNumber)')
+  account="$number-compute@developer.gserviceaccount.com"
+  # Compute Engine creates it, and its Editor role, a moment after being turned on.
+  for _ in 1 2 3 4 5 6; do
+    if gcloud iam service-accounts describe "$account" --project "$TF_VAR_project_id" > /dev/null 2>&1; then break; fi
+    sleep "${RUN_WAIT:-10}"
+  done
+  gcloud projects remove-iam-policy-binding "$TF_VAR_project_id" --condition=None --role=roles/editor \
+    --member="serviceAccount:$account" > /dev/null 2>&1 || true
+  gcp_last
+
+  bucket=$(gcloud storage buckets list --project "$TF_VAR_bootstrap_project_id" --filter='name~^tfstate-' --format='value(name)' | head -n 1)
+}
+
+gcp_fresh() { :; }
+
+gcp_has_state() {
+  gcloud storage ls "gs://$bucket/bootstrap/default.tfstate" > /dev/null 2>&1
+}
+
+gcp_backend() {
+  cat << EOF
+terraform {
+  backend "gcs" {
+    bucket = "$bucket"
+    prefix = "bootstrap"
+  }
+}
+EOF
+}
+
+gcp_subjects() {
+  gcloud iam workload-identity-pools providers describe github --workload-identity-pool="${TF_VAR_pool_id:-github-actions}" \
+    --location=global --project "$TF_VAR_bootstrap_project_id" --format='value(attributeCondition)' | grep -o 'repo:[^"]*'
+}
+
+# ---- The run -------------------------------------------------------------------------------------
+
+step "GitHub: the environments behind the trust"
+code=0
+python3 "$scripts/github_checks.py" environments || code=$?
+case "$code" in
+  0) ;;
+  3) confirm "Have you run that check on your own computer, and did it print ok five times?" || stop "Run it there first: python3 bootstrap/scripts/github_checks.py environments" ;;
+  *) stop "Put the environments right first. Nothing was changed." ;;
+esac
+
+step "Terraform"
+"$scripts/install-terraform.sh" "$work/tf-bin"
+export PATH="$work/tf-bin:$PATH" TF_DATA_DIR="$work/tf-$cloud" TF_IN_AUTOMATION=1
+# Forget where an earlier run kept its state. This finds it again below.
+rm -f "$TF_DATA_DIR/terraform.tfstate"
+
+step "Sign-in"
+"${cloud}_setup"
+echo "$where"
+
+# The state is either still here, already in the bucket, or not there yet.
+if [ -s terraform.tfstate ]; then
+  step "An earlier run stopped halfway. Continuing with the state it left here."
+  rm -f backend.tf
+  local_state=yes
+  first_run=no
+elif [ -n "$bucket" ]; then
+  "${cloud}_has_state" || stop "There is a state store ($bucket), but this stack's state is not in it or you cannot read it. Do not go on: see the runbook."
+  "${cloud}_backend" > backend.tf
+  local_state=no
+  first_run=no
+else
+  "${cloud}_fresh"
+  rm -f backend.tf
+  local_state=yes
+  first_run=yes
+fi
+
+step "Plan"
+terraform init -input=false -lockfile=readonly > /dev/null || stop "terraform init failed. Nothing was changed."
+code=0
+terraform plan -input=false -detailed-exitcode -out=tfplan || code=$?
+[ "$code" = 0 ] || [ "$code" = 2 ] || stop "The plan failed. Nothing was changed."
+
+counts=$(terraform show -json tfplan | python3 -c '
+import json, sys
+actions = [r["change"]["actions"] for r in json.load(sys.stdin).get("resource_changes", []) if r["mode"] == "managed"]
+print(*(sum(verb in a for a in actions) for verb in ("create", "update", "delete")))
+')
+read -r create update delete <<< "$counts"
+[ "$delete" = 0 ] || stop "The plan would delete or replace $delete resource(s). Nothing was changed. See the runbook."
+if [ "$first_run" = yes ] && [ "$create" != "$expected" ]; then
+  stop "The plan would create $create resources and should create $expected. Nothing was changed."
+fi
+
+if [ "$code" = 2 ]; then
+  confirm "This will create $create and change $update resources, and delete none, in:
+  $where" || stop "Nothing was changed."
+  step "Apply"
+  terraform apply -input=false tfplan || stop "The apply stopped halfway. Keep this window open, wait a minute and run the same command again: it continues."
+fi
+rm -f tfplan
+
+if [ "$local_state" = yes ]; then
+  step "Moving the state into the new bucket"
+  terraform output -raw backend_tf > backend.tf
+  moved=no
+  for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    if terraform init -input=false -lockfile=readonly -migrate-state -force-copy > /dev/null; then
+      moved=yes
+      break
+    fi
+    echo "Waiting for your access to the bucket to take effect ($attempt of 20)"
+    sleep "${RUN_WAIT:-30}"
+  done
+  [ "$moved" = yes ] || stop "The state could not be moved yet. Keep this window open and run the same command again."
+  found=$(terraform state list | wc -l | tr -d ' ')
+  [ "$found" -ge "$expected" ] || stop "Only $found of $expected resources arrived in the bucket. The full state is still here, in terraform.tfstate.backup: keep this window open."
+  rm -f terraform.tfstate terraform.tfstate.backup
+fi
+
+step "Check: nothing left to change"
+code=0
+terraform plan -input=false -detailed-exitcode > /dev/null || code=$?
+case "$code" in
+  0) echo "ok" ;;
+  2) echo "Terraform still wants to change something. Run the same command again and read the plan." ;;
+  *) stop "The check failed. Everything was created: run the same command again." ;;
+esac
+"${cloud}_last"
+
+step "Check: every subject this cloud trusts"
+if diff <(jq -r '.[][]' ../subjects.json | sort) <("${cloud}_subjects" | sort); then
+  echo "ok   15 subjects match"
+else
+  stop "The list above differs from subjects.json (< expected, > found). Everything was created, but look into this before you use it."
+fi
+
+step "For GitHub"
+cat << 'EOF'
+Copy everything between the two lines. It holds ids, not passwords, so keep it off public pages.
+Then run this on your own computer, in your clone of the repo:
+
+  pbpaste | python3 bootstrap/scripts/load_secrets.py
+EOF
+echo "--------------------------------------------------"
+terraform output -json github_secrets | fold -w 100
+echo
+echo "--------------------------------------------------"
