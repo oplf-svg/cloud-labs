@@ -1,9 +1,10 @@
 name: site
 
-# Builds the site once and deploys it to Azure and AWS. First come both looks, which show what would change and share one
-# approval. Then one deploy after the other, each with an approval of its own, does exactly that. No code gets a cloud token
-# here before it is on main, so before a person has approved it. What the steps do stands in site/deploy, because agents may
-# not change a workflow file: they can propose a change to it there, and that takes the same approval as any other change.
+# Builds the site once and deploys it to Azure and AWS. First come both looks, which show what would change, as the identity
+# that can only look. Then one deploy after the other, each with an approval of its own, does exactly that. No code gets a
+# cloud token here before it is on main, so before a person has approved it. What the steps do stands in site/deploy, because
+# agents may not change a workflow file: they can propose a change to it there, and that takes the same approval as any other
+# change.
 on:
   pull_request:
     paths:
@@ -43,14 +44,15 @@ jobs:
           # As long as a deploy can wait for its approval.
           retention-days: 30
 
-  # The environment makes every job below wait for an approval, gives it the identity that may deploy, and allows main
-  # only. Each job names its own cloud's secrets and no others: GitHub hides a value only in jobs that use it.
+  # Both environments allow main only. A look needs no approval, and gets the identity that can only look. A deploy waits for
+  # its approval, and gets the identity that may deploy. Each job names its own cloud's secrets and no others: GitHub hides a
+  # value only in jobs that use it.
   look-azure:
     if: ${{ github.event_name != 'pull_request' }}
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    environment: production
+    environment: plan
     permissions:
       contents: read
       id-token: write
@@ -77,7 +79,7 @@ jobs:
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    environment: production
+    environment: plan
     permissions:
       contents: read
       id-token: write
