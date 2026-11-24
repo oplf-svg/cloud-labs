@@ -209,6 +209,7 @@ run "models" {
   assert {
     condition = alltrue([
       for a in [
+        "Microsoft.App/agents/write", "Microsoft.App/agentspaces/write", "Microsoft.App/agentspaces/join/action",
         "Microsoft.CognitiveServices/accounts/write", "Microsoft.CognitiveServices/accounts/deployments/write", "Microsoft.CognitiveServices/accounts/listKeys/action", "Microsoft.CognitiveServices/accounts/regenerateKey/action",
         "Microsoft.MachineLearningServices/workspaces/write", "Microsoft.MachineLearningServices/workspaces/onlineEndpoints/write", "Microsoft.MachineLearningServices/workspaces/listKeys/action",
         "Microsoft.Marketplace/offerTypes/publishers/offers/plans/agreements/write", "Microsoft.MarketplaceOrdering/agreements/offers/plans/sign/action", "Microsoft.MarketplaceOrdering/offertypes/publishers/offers/plans/agreements/write",
@@ -239,7 +240,7 @@ run "models" {
   # And nothing else goes with that.
   assert {
     condition = alltrue([
-      for a in ["Microsoft.App/containerApps/write", "Microsoft.ContainerRegistry/registries/write", "Microsoft.ContainerService/managedClusters/write", "Microsoft.DBforPostgreSQL/flexibleServers/write", "Microsoft.EventHub/namespaces/write", "Microsoft.ManagedIdentity/userAssignedIdentities/write", "Microsoft.Web/staticSites/write"] :
+      for a in ["Microsoft.App/containerApps/write", "Microsoft.App/jobs/write", "Microsoft.App/managedEnvironments/write", "Microsoft.ContainerRegistry/registries/write", "Microsoft.ContainerService/managedClusters/write", "Microsoft.DBforPostgreSQL/flexibleServers/write", "Microsoft.EventHub/namespaces/write", "Microsoft.ManagedIdentity/userAssignedIdentities/write", "Microsoft.Web/staticSites/write"] :
       !anytrue([for n in azurerm_role_definition.apply.permissions[0].not_actions : can(regex("^${replace(replace(n, ".", "[.]"), "*", ".*")}$", a))])
     ])
     error_message = "Apply must still be able to set up containers, databases, clusters and sites."

@@ -80,8 +80,10 @@ locals {
   ]
 
   # Models are paid by the call, and on Azure one can only be called where somebody has set it up. That is for a person,
-  # and so is accepting what is sold on Marketplace.
+  # and so is accepting what is sold on Marketplace. Azure's own agents, next to containers, choose a model themselves.
   no_models = [
+    "Microsoft.App/agents/*",
+    "Microsoft.App/agentspaces/*",
     "Microsoft.CognitiveServices/*/action",
     "Microsoft.CognitiveServices/*/write",
     "Microsoft.MachineLearningServices/*/action",
