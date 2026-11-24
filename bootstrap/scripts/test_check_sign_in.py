@@ -50,6 +50,9 @@ TOKEN = jwt(SUBJECT)
 # What must never be in a public log.
 PRIVATE = [ACCOUNT, BUCKET, ROLES, CLIENT, SUBSCRIPTION, TENANT, STORE, OFFER, KEY, SECRET, SESSION, BEARER, TOKEN]
 
+# The state bucket once repos have deployed something. Before that, only the bootstrap's file is there.
+STATES = tuple(f"{owner}/terraform.tfstate" for owner in ("bootstrap", *checks.SUBJECTS))
+
 # What AWS says when it lets someone in.
 GRANTED = 0, json.dumps({"Credentials": {"AccessKeyId": KEY, "SecretAccessKey": SECRET, "SessionToken": SESSION}}), ""
 
@@ -62,8 +65,9 @@ def refuse(code):
 class FakeAws:
     """Answers as AWS should. `changes` maps part of a command to another answer."""
 
-    def __init__(self, changes=None, repo=REPO):
-        self.changes, self.repo, self.commands, self.token_files = changes or {}, repo, [], set()
+    def __init__(self, changes=None, repo=REPO, files=("bootstrap/terraform.tfstate",)):
+        self.changes, self.repo, self.files = changes or {}, repo, files
+        self.commands, self.token_files = [], set()
 
     def answer(self, line):
         for part, reply in self.changes.items():
@@ -78,8 +82,15 @@ class FakeAws:
             return 0, "{}", ""
         if "create-vpc" in line:
             return refuse("UnauthorizedOperation")
-        if f"get-object --bucket {BUCKET} --key {self.repo}/" in line:
-            return refuse("NoSuchKey")
+        if "list-objects-v2" in line:
+            prefix = re.search(r"--prefix (\S+)", line).group(1)
+            found = [{"Key": name} for name in self.files if name.startswith(prefix)]
+            return 0, json.dumps({"Contents": found} if found else {"RequestCharged": None, "Prefix": prefix}), ""
+        if "get-object" in line:
+            # As S3 does: whoever may list the bucket hears that a file is missing, whatever they may open.
+            key = re.search(r"--key (\S+)", line).group(1)
+            own = key.startswith(f"{self.repo}/")
+            return refuse("NoSuchKey") if key not in self.files else (0, "{}", "") if own else refuse("AccessDenied")
         return refuse("AccessDenied")
 
     def __call__(self, command, env, **options):
@@ -161,13 +172,24 @@ class Aws(Base):
                 "ok   be that role, in the expected account: yes",
                 "ok   use London: allowed",
                 "ok   create a network: denied",
-                "ok   read its own state: allowed",
-                "ok   read the state of webhook-platform: denied",
+                "ok   read its own state: nothing there",
+                "ok   read the state of webhook-platform: nothing there",
                 "ok   read the state of the bootstrap: denied",
                 "ok   write its own state: denied",
             ],
         )
         self.assert_private(output)
+
+    def test_opens_a_file_as_soon_as_there_is_one(self):
+        status, output = run("aws", FakeAws(files=STATES))
+        self.assertEqual(status, 0)
+        self.assertIn("ok   read its own state: allowed\n", output)
+        self.assertIn("ok   read the state of webhook-platform: denied\n", output)
+        self.assert_private(output)
+
+    def test_there_is_always_a_state_of_the_bootstrap(self):
+        result = run("aws", FakeAws(files=()))
+        self.assert_fails_only(result, "FAIL read the state of the bootstrap: nothing there, should be denied")
 
     def test_fails_on_a_right_too_many(self):
         cases = {
@@ -175,13 +197,14 @@ class Aws(Base):
             f"{ROLES}/gha-{REPO}-destroy": (GRANTED, "become gha-cloud-labs-destroy"),
             f"{ROLES}/gha-{OTHER}-plan": (GRANTED, "become gha-webhook-platform-plan"),
             "create-vpc": (refuse("DryRunOperation"), "create a network"),
-            f"get-object --bucket {BUCKET} --key {OTHER}/": (refuse("NoSuchKey"), "read the state of webhook-platform"),
+            f"get-object --bucket {BUCKET} --key {OTHER}/": ((0, "{}", ""), "read the state of webhook-platform"),
             f"get-object --bucket {BUCKET} --key bootstrap/": ((0, "{}", ""), "read the state of the bootstrap"),
             "put-object": (refuse("NoSuchKey"), "write its own state"),
         }
         for part, (reply, what) in cases.items():
             with self.subTest(what):
-                self.assert_fails_only(run("aws", FakeAws({part: reply})), f"FAIL {what}: allowed, should be denied")
+                result = run("aws", FakeAws({part: reply}, files=STATES))
+                self.assert_fails_only(result, f"FAIL {what}: allowed, should be denied")
 
     def test_a_replaced_file_also_counts_as_the_right_to_write(self):
         for code in ("PreconditionFailed", "NoSuchKey"):
@@ -192,10 +215,11 @@ class Aws(Base):
         cases = {
             "describe-availability-zones": ("UnauthorizedOperation", "use London"),
             f"get-object --bucket {BUCKET} --key {REPO}/": ("AccessDenied", "read its own state"),
+            f"--prefix {REPO}/": ("AccessDenied", "read its own state"),
         }
         for part, (code, what) in cases.items():
-            with self.subTest(what):
-                result = run("aws", FakeAws({part: refuse(code)}))
+            with self.subTest(part):
+                result = run("aws", FakeAws({part: refuse(code)}, files=STATES))
                 self.assert_fails_only(result, f"FAIL {what}: denied, should be allowed")
 
     def test_stops_when_the_sign_in_is_refused(self):
@@ -205,6 +229,10 @@ class Aws(Base):
                 line = f"FAIL sign in as gha-cloud-labs-plan: {shown}, should be allowed"
                 self.assert_fails_only(run("aws", fake), line)
                 self.assertEqual(len(fake.commands), 1)
+
+    def test_a_list_that_fails_is_not_taken_for_an_empty_one(self):
+        result = run("aws", FakeAws({f"--prefix {OTHER}/": refuse("SlowDown")}))
+        self.assert_fails_only(result, "FAIL read the state of webhook-platform: SlowDown, should be denied")
 
     def test_another_error_is_not_taken_for_a_refusal(self):
         for reply, shown in ((refuse("ExpiredToken"), "ExpiredToken"), ((255, "", f"lost {BUCKET}"), "no error code")):
@@ -234,10 +262,10 @@ class Aws(Base):
         self.assertFalse(any(path.exists() for path in fake.token_files))
 
     def test_no_command_can_change_anything(self):
-        fake = FakeAws()
+        fake = FakeAws(files=STATES)
         run("aws", fake)
         for command, _ in fake.commands:
-            reads = command[2].startswith(("assume-role-with-web-identity", "describe-", "get-"))
+            reads = command[2].startswith(("assume-role-with-web-identity", "describe-", "get-", "list-"))
             self.assertTrue(reads or "--dry-run" in command or "--if-match" in command, command)
 
 

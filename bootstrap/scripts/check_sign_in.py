@@ -25,9 +25,9 @@ import urllib.request
 OWNER = "oplf-svg"
 SUBJECTS = json.loads((pathlib.Path(__file__).resolve().parent.parent / "subjects.json").read_text())
 
-ALLOWED, DENIED = "allowed", "denied"
+ALLOWED, DENIED, EMPTY = "allowed", "denied", "nothing there"
 
-# The name of the session, and of the files that are looked for and never written.
+# The name of the session, and of the files that are never written.
 NAME = "check-sign-in"
 
 # The only part of an error that is ever printed.
@@ -35,7 +35,7 @@ CODE = "[A-Za-z][A-Za-z0-9.]{1,63}"
 
 AWS_REGION = "eu-west-2"
 AWS_DENIED = {"AccessDenied", "UnauthorizedOperation"}
-# What AWS says to someone with the right: nothing to read, nothing to replace, or only a dry run.
+# What AWS says to someone with the right: only a dry run, or nothing to replace.
 AWS_ALLOWED = {"DryRunOperation", "NoSuchKey", "PreconditionFailed"}
 
 AZURE_DENIED = {"AuthorizationFailed", "AuthorizationPermissionMismatch"}
@@ -131,8 +131,15 @@ def check_aws(repo, other, token, env, run, send):
     def call(*arguments):
         return aws(arguments, signed, run)[1]
 
-    def read(key):
-        return call("s3api", "get-object", "--bucket", bucket, "--key", key, os.devnull)
+    def read(owner):
+        # Opens a file that is in the list, because a missing one tells nothing: S3 says that it is missing
+        # to everyone who may list the bucket, whatever they may open.
+        listing = ["s3api", "list-objects-v2", "--bucket", bucket, "--prefix", f"{owner}/", "--max-items", "1"]
+        output, got = aws(listing, signed, run)
+        files = json.loads(output or "{}").get("Contents") or []
+        if got == ALLOWED and files:
+            return call("s3api", "get-object", "--bucket", bucket, "--key", files[0]["Key"], os.devnull)
+        return EMPTY if got == ALLOWED else got
 
     identity = json.loads(aws(["sts", "get-caller-identity"], signed, run)[0] or "{}")
     expected = f"arn:aws:sts::{account}:assumed-role/gha-{repo}-plan/{NAME}"
@@ -140,9 +147,9 @@ def check_aws(repo, other, token, env, run, send):
 
     yield "use London", ALLOWED, call("ec2", "describe-availability-zones")
     yield "create a network", DENIED, call("ec2", "create-vpc", "--cidr-block", "10.0.0.0/16", "--dry-run")
-    yield "read its own state", ALLOWED, read(f"{repo}/{NAME}")
-    yield f"read the state of {other}", DENIED, read(f"{other}/{NAME}")
-    yield "read the state of the bootstrap", DENIED, read("bootstrap/terraform.tfstate")
+    yield "read its own state", (ALLOWED, EMPTY), read(repo)
+    yield f"read the state of {other}", (DENIED, EMPTY), read(other)
+    yield "read the state of the bootstrap", DENIED, read("bootstrap")
     # It may only replace a version of the file that does not exist.
     never = ["--if-match", f'"{"0" * 32}"']
     yield "write its own state", DENIED, call("s3api", "put-object", "--bucket", bucket, "--key", f"{repo}/{NAME}", *never)
@@ -258,8 +265,9 @@ def main(argv=None, env=os.environ, run=subprocess.run, send=answer):
         repo, other, token = prepare(needed, audience, env, send)
         print(f"ok   GitHub's subject is {SUBJECTS[repo]['plan']}", flush=True)
         for what, wanted, got in check(repo, other, token, env, run, send):
-            failed = failed or got != wanted
-            print(f"ok   {what}: {got}" if got == wanted else f"FAIL {what}: {got}, should be {wanted}", flush=True)
+            accepted = (wanted,) if isinstance(wanted, str) else wanted
+            failed = failed or got not in accepted
+            print(f"ok   {what}: {got}" if got in accepted else f"FAIL {what}: {got}, should be {accepted[0]}", flush=True)
     except Unusable as problem:
         print(f"Not checked. {problem}")
         return 1

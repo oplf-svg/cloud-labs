@@ -102,8 +102,11 @@ else.
 
 [sign-in.yml](../.github/workflows/sign-in.yml) runs on every pull request that changes this folder. It signs in to AWS
 and Azure as this repo's `plan`, and [check_sign_in.py](scripts/check_sign_in.py) tries what that identity may and may
-not do. It must be able to look around and to find its own state. It must be refused when it creates something, writes
+not do. It must be able to look around and to read its own state. It must be refused when it creates something, writes
 state, or reads what belongs to another repo or to the bootstrap, and on AWS when it asks for another role.
+
+On AWS only a file that exists can show who may open it. S3 says that a file is missing to everyone who may list the
+bucket, whatever they may open. So as long as a repo has no state, its line says `nothing there`.
 
 Nothing is changed, even if a right turns out to be too wide: every write is a dry run, a validation, or the replacement
 of a file that does not exist. The log is public, so it shows the script's own words and error codes only.
