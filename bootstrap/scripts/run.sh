@@ -52,7 +52,8 @@ step() {
 }
 
 stop() {
-  printf '\nSTOPPED: %s\n' "$*" >&2
+  # Where something was changed before Terraform came, a stop must not deny it.
+  printf '\nSTOPPED: %s\n' "${*/Nothing was changed./${already:-Nothing was changed.}}" >&2
   exit 1
 }
 
@@ -248,6 +249,7 @@ gcp_setup() {
   where="Google Cloud projects $TF_VAR_project_id and $TF_VAR_bootstrap_project_id"
 
   confirm "This turns on the Google APIs in services.json, and takes away in $TF_VAR_project_id: the Editor role of the default service account, and three roles of apply that it no longer has." || stop "Nothing was changed."
+  already="Terraform has changed nothing, but the services are on and the roles stay away."
   gcloud services enable bigquery.googleapis.com cloudresourcemanager.googleapis.com iam.googleapis.com storage.googleapis.com sts.googleapis.com --project "$TF_VAR_bootstrap_project_id"
   # All that a stack may use: apply can turn on nothing else.
   # shellcheck disable=SC2046

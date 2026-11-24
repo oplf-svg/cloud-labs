@@ -235,7 +235,7 @@ class Run(unittest.TestCase):
             with self.subTest(cloud):
                 self.setUp()
                 self.assertEqual(self.type(cloud, early, *answers), 1, self.out)
-                self.assertIn("Nothing was changed", self.out)
+                self.assertIn("Nothing was changed" if cloud == "aws" else "Terraform has changed nothing", self.out)
                 self.assertFalse(self.applied())
 
     def test_what_is_typed_early_does_not_spoil_the_answer(self):
@@ -343,7 +343,9 @@ class Run(unittest.TestCase):
         for cloud in self.each_cloud():
             (self.box / "remote").write_text(str(EXPECTED[cloud]))
             self.assertEqual(self.go(cloud, bucket="tfstate-0a1b2c3d", delete=5), 1)
-            self.assertIn("The plan would delete or replace 5 resource(s). Nothing was changed.", self.out)
+            # On Google, something was changed before the plan.
+            unchanged = "Terraform has changed nothing, but the services are on and the roles stay away." if cloud == "gcp" else "Nothing was changed."
+            self.assertIn(f"STOPPED: The plan would delete or replace 5 resource(s). {unchanged} See the runbook.", self.out)
             self.assertFalse(self.applied())
 
     def test_a_subject_that_is_no_longer_in_the_list_is_not_accepted(self):
@@ -392,6 +394,16 @@ class Run(unittest.TestCase):
         (self.box / "log").unlink()
         self.assertEqual(self.go("gcp", bindings=held, bucket="tfstate-0a1b2c3d"), 0, self.out)
         self.assertEqual(lines(), [])
+
+    def test_google_does_not_deny_what_was_changed(self):
+        said = "Terraform has changed nothing, but the services are on and the roles stay away."
+        self.assertEqual(self.go("gcp", answer="no"), 1)
+        self.assertIn("STOPPED: Nothing was changed.\n", self.out)
+        self.setUp()
+        self.assertEqual(self.type("gcp", "", "yes\n", "no\n"), 1, self.out)
+        self.assertIn(f"STOPPED: {said}", self.out)
+        self.assertNotIn("Nothing was changed", self.out)
+        self.assertFalse(self.applied())
 
     def test_google_takes_nothing_from_others(self):
         tiers = "principalSet://iam.googleapis.com/projects/123456789012/locations/global/workloadIdentityPools/github-actions/attribute.tier"
