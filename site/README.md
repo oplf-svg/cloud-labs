@@ -52,6 +52,9 @@ deploy, so there are few of them, and the budget alert is the last line.
 5. It then asks for every address as a visitor would, and fails unless the bytes are those that were built, the security
    headers are there, no cookie is set, there is nothing to sign in to, and an address that does not exist gets a 404.
 
+Each morning the looks run by themselves, and nothing else. They end red if what is live is not what `main` says, because
+somebody has changed it or a deploy is still to be approved.
+
 [deploy.py](deploy/deploy.py) does this, and [its tests](deploy/test_deploy.py) run against stand-ins for both clouds.
 The very first deploy has to wait until the night run has succeeded once on its schedule.
 

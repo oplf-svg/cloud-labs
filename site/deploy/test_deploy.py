@@ -393,6 +393,46 @@ class Deploy(unittest.TestCase):
         code, output = self.go("look", world)
         self.assertEqual((code, "pwned" in output, [url for url in world.asked if "pwned" in url]), (0, False, []))
 
+    def test_a_look_by_the_clock_is_red_if_there_is_anything_to_do(self):
+        place = {"aws": AWS_PLACE, "azure": AZURE_PLACE}
+        adjusted = {"aws": SWITCHED_ON, "azure": change("azapi_resource.site", "update", before={"x": "a"}, after={"x": "b"})}
+
+        def look(cloud, plan, live, **env):
+            world = World(cloud, plan=plan, place=live and place[cloud])
+            world.there = {name: hashlib.md5(body).hexdigest() for name, body in (live or {}).items()}
+            world.site = dict(live or {})
+            code, output = self.go("look", world, **env)
+            self.assertEqual(self.changed(world), [])
+            return code, output
+
+        for cloud in place:
+            by_clock = {"GITHUB_EVENT_NAME": "schedule"}
+            code, output = look(cloud, [], FILES, **by_clock)
+            self.assertEqual((code, self.mark), (0, ""), output)
+            self.assertTrue(output.endswith("\nWhat is live is what main says.\n"), output)
+            for what, plan, live in (
+                ("create ", None, None),
+                (f"update {adjusted[cloud]['address']}", [adjusted[cloud]], FILES),
+                ("9 new, 0 changed, 0 removed", [], {"404.html": FILES["404.html"]} if cloud == "azure" else {}),
+                ("0 new, 1 changed, 0 removed", [], FILES | {"index.html": b"by hand"}),
+                ("0 new, 1 changed, 0 removed", [], FILES | {"404.html": b"by hand"}),
+                ("0 new, 2 changed, 1 removed", [], with_list(FILES | {"index.html": b"before", "old/index.html": b"old"})),
+                ("1 new, 1 changed, 0 removed", [], with_list({name: body for name, body in FILES.items() if name not in ("robots.txt", deploy.LIST)})),
+                # Azure has no list of its own, so what its own list does not name is not seen there.
+                *([("0 new, 0 changed, 1 removed", [], FILES | {"old/index.html": b"old"})] if cloud == "aws" else []),
+            ):
+                with self.subTest(cloud=cloud, what=what):
+                    code, output = look(cloud, plan, live, **by_clock)
+                    self.assertEqual((code, self.mark), (1, ""), output)
+                    self.assertIn(what, output)
+                    self.assertTrue(output.endswith("\nStopped. What is live is not what main says: somebody has changed it, or a deploy is still to be approved.\n"), output)
+                    # Whoever starts it wants to see that, and may deploy it.
+                    for env in ({}, {"GITHUB_EVENT_NAME": "push"}, {"GITHUB_EVENT_NAME": "workflow_dispatch"}):
+                        code, output = look(cloud, plan, live, **env)
+                        self.assertEqual(code, 0, output)
+                        self.assertRegex(self.mark, "^[0-9a-f]{64}$")
+                        self.assertNotIn("What is live", output)
+
     def test_does_what_was_looked_at_on_aws(self):
         old = {"old/index.html": "0" * 32}
         first = World("aws")
@@ -748,7 +788,7 @@ class Consistent(unittest.TestCase):
         closed = {rule["route"] for rule in config["routes"][:-1] if rule.get("statusCode") == 404}
         self.assertLessEqual({*deploy.SIGN_IN, "/.auth/*"}, closed)
 
-    def test_only_the_deploys_wait_for_an_approval(self):
+    def test_only_the_deploys_wait_for_an_approval_and_the_clock_starts_none(self):
         text = (deploy.SITE.parent / ".github/workflows/site.yml").read_text()
         jobs = dict(re.findall(r"^  ([a-z-]+):\n((?:(?:    .*)?\n)+)", text.partition("\njobs:\n")[2] + "\n", re.M))
         self.assertEqual(set(jobs), {"build", "look-azure", "look-aws", "deploy-azure", "deploy-aws"})
@@ -761,9 +801,11 @@ class Consistent(unittest.TestCase):
             used = re.findall(r"^      (\w+): \$\{\{ secrets\.(\w+) \}\}$", job, re.M)
             self.assertEqual(sorted(used), sorted((secret, secret) for secret in deploy.CLOUDS[cloud][0]), name)
             self.assertEqual(job.count("secrets."), len(used), name)
+        # What the clock starts has a lane of its own, so it never stands in front of a deploy, or pushes one out that waits.
+        self.assertIn("\nconcurrency:\n  group: site-${{ github.event.pull_request.number || github.event_name == 'schedule' && 'morning' || 'main' }}\n", text)
         # A deploy does only what its own look has shown, and the two never wait for an approval together.
         for cloud, needs in (("azure", "[look-azure, look-aws]"), ("aws", "[look-aws, deploy-azure]")):
-            self.assertIn(f"    if: ${{{{ !cancelled() && needs.look-{cloud}.result == 'success' }}}}\n    needs: {needs}\n", jobs[f"deploy-{cloud}"])
+            self.assertIn(f"    if: ${{{{ !cancelled() && github.event_name != 'schedule' && needs.look-{cloud}.result == 'success' }}}}\n    needs: {needs}\n", jobs[f"deploy-{cloud}"])
             self.assertIn(f"      FINGERPRINT: ${{{{ needs.look-{cloud}.outputs.fingerprint }}}}\n", jobs[f"deploy-{cloud}"])
             self.assertIn("    if: ${{ github.event_name != 'pull_request' }}\n    needs: build\n", jobs[f"look-{cloud}"])
 
