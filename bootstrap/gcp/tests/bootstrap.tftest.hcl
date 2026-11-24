@@ -202,6 +202,15 @@ run "permissions" {
     error_message = "Changing access must always be limited by the condition."
   }
 
+  # Apply may make these, so destroy has to see them and be able to delete them.
+  assert {
+    condition = alltrue([
+      for type in ["cloudsql.backupRuns", "cloudsql.instances", "container.clusters", "run.instances", "run.jobs", "run.services", "run.workerpools"] :
+      contains(local.read_permissions, "${type}.get") && contains(local.read_permissions, "${type}.list") && contains(local.delete_permissions, "${type}.delete")
+    ])
+    error_message = "What apply may make and what costs, destroy must see and delete."
+  }
+
   # The delete role may also hold the three helper permissions named here, and nothing else.
   assert {
     condition = alltrue([
