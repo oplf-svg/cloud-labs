@@ -1,0 +1,65 @@
+---
+import "@fontsource-variable/atkinson-hyperlegible-next";
+import "@fontsource-variable/atkinson-hyperlegible-mono";
+import "../styles/site.css";
+import { WORDS } from "../text/recordings.ts";
+import { to } from "../text/paths.ts";
+import { LANGS, type Lang } from "../text/types.ts";
+
+interface Props {
+  lang: Lang;
+  /** The page's address without its language. */
+  path: string;
+  title?: string;
+  description?: string;
+}
+const { lang, path, title, description } = Astro.props;
+const words = WORDS[lang];
+const pages = [
+  { path: "/proof/", text: words.nav.proof },
+  { path: "/notes/", text: words.nav.notes },
+  { path: "/how/", text: words.nav.how },
+];
+---
+
+<!doctype html>
+<html lang={lang}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width" />
+    <title>{title ? `${title} · oplf-svg` : `${words.title} · oplf-svg`}</title>
+    <meta name="description" content={description ?? words.description} />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f6f9f5" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0c1413" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    {LANGS.map((other) => <link rel="alternate" hreflang={other} href={to(other, path)} />)}
+  </head>
+  <body>
+    <a class="skip" href="#content">{words.skip}</a>
+    <header class="wide top">
+      <a class="home" href={to(lang)}>
+        <svg viewBox="0 0 36 20" aria-hidden="true"><path d="M0 10h12l3-8 5 16 3-8h13"></path></svg>
+        <span>oplf-svg</span>
+      </a>
+      <nav aria-label={words.menu}>
+        <ul>
+          {pages.map((page) => (
+            <li><a href={to(lang, page.path)} aria-current={path === page.path ? "page" : path.startsWith(page.path) ? "true" : undefined}>{page.text}</a></li>
+          ))}
+        </ul>
+      </nav>
+      <nav aria-label={words.languages}>
+        <ul class="languages">
+          {LANGS.map((other) => (
+            <li><a href={to(other, path)} lang={other} hreflang={other} aria-current={other === lang ? "true" : undefined} aria-label={`${other.toUpperCase()}, ${WORDS[other].language}`}>{other.toUpperCase()}</a></li>
+          ))}
+        </ul>
+      </nav>
+    </header>
+    <main id="content"><slot /></main>
+    <footer class="wide foot">
+      <span>{words.footer.text}</span>
+      <a href="https://github.com/oplf-svg/cloud-labs/tree/main/site">{words.footer.source}</a>
+    </footer>
+  </body>
+</html>

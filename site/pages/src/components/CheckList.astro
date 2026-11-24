@@ -1,0 +1,26 @@
+---
+import { toMark, WORDS, type Run } from "../text/recordings.ts";
+import type { Lang } from "../text/types.ts";
+
+const { lang, run } = Astro.props as { lang: Lang; run: Run };
+const words = WORDS[lang];
+const names = Object.fromEntries(run.lanes.map((lane) => [lane.id, lane.name]));
+---
+
+<table class="stack">
+  <thead>
+    <tr><th scope="col">{words.score.cloud}</th><th scope="col">{words.score.checks}</th><th scope="col">{words.score.answer}</th></tr>
+  </thead>
+  <tbody>
+    {run.checks.map((check) => {
+      const mark = toMark(check, words);
+      return (
+        <tr>
+          <td data-label={words.score.cloud}>{names[check.lane]}</td>
+          <td class="long"><code lang="en">{check.what}</code></td>
+          <td class={`long k-${mark.kind}`}>{mark.result}</td>
+        </tr>
+      );
+    })}
+  </tbody>
+</table>

@@ -1,0 +1,64 @@
+---
+import Part from "../../components/Part.astro";
+import sizes from "../../data/builds.json";
+import Page from "../../layouts/Page.astro";
+import { everyLang, to } from "../../text/paths.ts";
+import { WORDS } from "../../text/recordings.ts";
+import type { Lang } from "../../text/types.ts";
+
+export const getStaticPaths = everyLang;
+const { lang } = Astro.props as { lang: Lang };
+const { how, nav, proof } = WORDS[lang];
+const kilobytes = (bytes: number) => `${new Intl.NumberFormat(lang, { maximumFractionDigits: 0 }).format(bytes / 1024)} ${lang === "fr" ? "Ko" : "KB"}`;
+const builds = [["React", sizes.react], ["Angular", sizes.angular]] as const;
+---
+
+<Page lang={lang} path="/how/" title={how.title} description={how.lead}>
+  <div class="wide page-head">
+    <h1>{how.title}</h1>
+    <p class="lead">{how.lead}</p>
+  </div>
+  <Part id="keys" title={how.keys.title}>
+    <div class="prose">
+      {how.keys.text.map((text) => <p>{text}</p>)}
+      <ul class="rows tiers">
+        {how.keys.tiers.map((tier) => (
+          <li>
+            <div class="tier">
+              <span class="name">{tier.name}</span><span>{tier.who}</span><span>{tier.can}</span>
+              <span><span class={`status ${tier.state === "tested" ? "proven" : "used"}`}>{how.keys[tier.state]}</span></span>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
+  </Part>
+  <Part id="agents" title={how.agents.title}>
+    <div class="prose">
+      {how.agents.text.map((text) => <p>{text}</p>)}
+      <ul class="rows tiers">
+        {how.agents.rules.map(({ rule, state }) => (
+          <li>
+            <div class="tier two"><span>{rule}</span><span><span class={`status ${state}`}>{proof.statuses[state]}</span></span></div>
+          </li>
+        ))}
+      </ul>
+      <p><a href={`${to(lang, "/proof/")}?for=agents`}>{nav.proof}</a></p>
+    </div>
+  </Part>
+  <Part id="ai" title={how.ai.title}>
+    <div class="prose">{how.ai.text.map((text) => <p>{text}</p>)}</div>
+  </Part>
+  <Part id="builds" title={how.builds.title}>
+    <div class="prose">
+      {how.builds.text.map((text) => <p>{text}</p>)}
+      <table class="stack narrow">
+        <thead><tr><th scope="col">{how.builds.build}</th><th scope="col">{how.builds.size}</th><th scope="col">{how.builds.tests}</th></tr></thead>
+        <tbody>{builds.map(([name, size]) => <tr><th scope="row">{name}</th><td class="num" data-label={how.builds.size}>{kilobytes(size)}</td><td data-label={how.builds.tests}>{how.builds.same}</td></tr>)}</tbody>
+      </table>
+    </div>
+  </Part>
+  <Part id="rules" title={how.rules.title}>
+    <div class="prose"><ul>{how.rules.list.map((rule) => <li>{rule}</li>)}</ul></div>
+  </Part>
+</Page>

@@ -1,3 +1,10 @@
 {
-  "stacks": []
+  "stacks": [
+    {
+      "name": "site",
+      "clouds": ["aws", "azure"],
+      "night": "stays",
+      "why": "The public site, on plans that cost nothing and have no overage charges"
+    }
+  ]
 }

@@ -1,0 +1,67 @@
+---
+import "@recorder/core/recorder.css";
+import CheckList from "../../components/CheckList.astro";
+import Page from "../../layouts/Page.astro";
+import { CLAIMS } from "../../text/claims.ts";
+import { day, everyLang } from "../../text/paths.ts";
+import { RUNS, WORDS, wrongIn } from "../../text/recordings.ts";
+import { DOORS, STATUSES, type Lang } from "../../text/types.ts";
+
+export const getStaticPaths = everyLang;
+const { lang } = Astro.props as { lang: Lang };
+const words = WORDS[lang];
+const { proof, doors, score } = words;
+---
+
+<Page lang={lang} path="/proof/" title={proof.title} description={proof.lead}>
+  <div class="wide page-head">
+    <h1>{proof.title}</h1>
+    <p class="lead">{proof.lead}</p>
+  </div>
+  <div class="wide">
+    <div class="chips" id="doors" role="group" aria-label={proof.filter} hidden>
+      <span class="quiet-text">{proof.filter}</span>
+      <button type="button" value="" aria-pressed="true">{proof.everyone}</button>
+      {DOORS.map((door) => <button type="button" value={door} aria-pressed="false">{doors.names[door]}</button>)}
+    </div>
+    {STATUSES.map((status) => (
+      <section data-group aria-labelledby={`status-${status}`}>
+        <h2 class="group" id={`status-${status}`}><span class={`status ${status}`}>{proof.statuses[status]}</span></h2>
+        <ul class="claims">
+          {CLAIMS.filter((claim) => claim.status === status).map((claim) => (
+            <li data-doors={claim.doors.join(" ")}>
+              <p class="text">{claim.claim[lang]}</p>
+              <div class="proof">
+                <code>{claim.project}</code>
+                {claim.evidence.length > 0 && <ul aria-label={proof.evidence}>{claim.evidence.map((link) => <li><a href={link.href}>{link.text[lang]}</a></li>)}</ul>}
+              </div>
+              {claim.limit && <p class="limit">{proof.limit}: {claim.limit[lang]}</p>}
+            </li>
+          ))}
+        </ul>
+      </section>
+    ))}
+  </div>
+  <section class="wide" id="runs" aria-labelledby="runs-title">
+    <h2 id="runs-title">{proof.runs.title}</h2>
+    <p class="lead after">{proof.runs.lead}</p>
+    {RUNS.map((run) => {
+      const wrong = wrongIn(run.checks);
+      return (
+        <details>
+          <summary>
+            <span>
+              {proof.runs.run(run.number)}, {day(lang, run.date)}: <span class={wrong ? "k-wrong" : "k-refused"}>{score.verdict(run.checks.length, wrong)}</span>
+            </span>
+          </summary>
+          <p class="before"><a href={run.url} aria-label={`${proof.runs.open}: ${proof.runs.run(run.number)}`}>{proof.runs.open}</a> <code>{run.commit}</code></p>
+          <CheckList lang={lang} run={run} />
+        </details>
+      );
+    })}
+  </section>
+</Page>
+
+<script>
+  import "../../scripts/filter.ts";
+</script>

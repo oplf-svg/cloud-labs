@@ -1,0 +1,32 @@
+---
+import Page from "../../../layouts/Page.astro";
+import { NOTES } from "../../../text/notes.ts";
+import { day, everyLang, to } from "../../../text/paths.ts";
+import { WORDS } from "../../../text/recordings.ts";
+import type { Lang, Note } from "../../../text/types.ts";
+
+export const getStaticPaths = () => everyLang().flatMap(({ params, props }) => NOTES.map((note) => ({ params: { ...params, slug: note.slug }, props: { ...props, note } })));
+const { lang, note } = Astro.props as { lang: Lang; note: Note };
+const { notes } = WORDS[lang];
+---
+
+<Page lang={lang} path={`/notes/${note.slug}/`} title={note.title[lang]} description={note.summary[lang]}>
+  <article class="wide">
+    <div class="page-head">
+      <p class="quiet-text"><time datetime={note.date}>{day(lang, note.date)}</time></p>
+      <h1>{note.title[lang]}</h1>
+      <p class="lead">{note.summary[lang]}</p>
+    </div>
+    <div class="prose">
+      <h2>{notes.happened}</h2>
+      {note.happened.map((text) => <p>{text[lang]}</p>)}
+      <h2>{notes.silent}</h2>
+      <p>{note.silent[lang]}</p>
+      <h2>{notes.now}</h2>
+      <p>{note.now[lang]}</p>
+      <h2>{notes.evidence}</h2>
+      <ul>{note.evidence.map((link) => <li><a href={link.href}>{link.text[lang]}</a></li>)}</ul>
+      <p class="far"><a href={to(lang, "/notes/")}>{notes.all}</a></p>
+    </div>
+  </article>
+</Page>
