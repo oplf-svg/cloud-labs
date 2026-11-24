@@ -301,3 +301,25 @@ resource "google_project_iam_member" "apply_more_grants" {
 
   depends_on = [google_iam_workload_identity_pool_provider.github]
 }
+
+# What containers on Cloud Run print, and why one did not start. Not who called them, and not the audit logs. This is no wall:
+# with roles/logging.configWriter, apply can change a view, as it can already send all logs somewhere else.
+resource "google_logging_log_view" "containers" {
+  parent      = "projects/${var.project_id}"
+  location    = "global"
+  bucket      = "_Default"
+  name        = "containers"
+  description = "What containers on Cloud Run print. For the apply identities."
+  filter      = "(${join(" OR ", [for type in ["job", "revision"] : "resource.type=\"cloud_run_${type}\""])}) AND (${join(" OR ", [for log in ["stderr", "stdout", "varlog/system"] : "log_id(\"run.googleapis.com/${log}\")"])})"
+}
+
+resource "google_logging_log_view_iam_member" "apply" {
+  parent   = google_logging_log_view.containers.parent
+  location = google_logging_log_view.containers.location
+  bucket   = google_logging_log_view.containers.bucket
+  name     = google_logging_log_view.containers.name
+  role     = "roles/logging.viewAccessor"
+  member   = local.tier_principals["apply"]
+
+  depends_on = [google_iam_workload_identity_pool_provider.github]
+}

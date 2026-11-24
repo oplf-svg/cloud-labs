@@ -103,7 +103,7 @@ run "trust" {
       && alltrue([
         for m in concat(
           [for m in concat(values(google_project_iam_member.apply), values(google_project_iam_member.read), [google_project_iam_member.delete, google_project_iam_member.apply_service_accounts, google_project_iam_member.apply_grants, google_project_iam_member.apply_more_grants, google_project_iam_member.census]) : m.member],
-          [google_bigquery_dataset_iam_member.cost.member],
+          [google_bigquery_dataset_iam_member.cost.member, google_logging_log_view_iam_member.apply.member],
           flatten([for b in jsondecode(google_storage_bucket_iam_policy.state.policy_data).bindings : b.members]),
         ) : !strcontains(m, "/*") && !strcontains(m, "attribute.tier/none") && (!strcontains(m, "/attribute.") || can(regex("/attribute[.]tier/(plan|apply|destroy)$", m)))
       ])
@@ -218,7 +218,7 @@ run "permissions" {
 
   assert {
     condition = alltrue([
-      for m in concat(values(google_project_iam_member.apply), [google_project_iam_member.apply_service_accounts, google_project_iam_member.apply_grants, google_project_iam_member.apply_more_grants]) :
+      for m in concat(values(google_project_iam_member.apply), [google_project_iam_member.apply_service_accounts, google_project_iam_member.apply_grants, google_project_iam_member.apply_more_grants, google_logging_log_view_iam_member.apply]) :
       m.member == "principalSet://iam.googleapis.com/projects/123456789012/locations/global/workloadIdentityPools/github-actions/attribute.tier/apply"
     ])
     error_message = "Deploy rights belong to the apply tier only."
@@ -247,6 +247,40 @@ run "permissions" {
       m.project == "example-project-1"
     ])
     error_message = "No pipeline may have a project role in the bootstrap project."
+  }
+}
+
+run "logs" {
+  command = apply
+
+  # Written out, because whatever this lets through stands in front of an identity whose job logs are public.
+  assert {
+    condition = (
+      google_logging_log_view.containers.filter == "(resource.type=\"cloud_run_job\" OR resource.type=\"cloud_run_revision\") AND (log_id(\"run.googleapis.com/stderr\") OR log_id(\"run.googleapis.com/stdout\") OR log_id(\"run.googleapis.com/varlog/system\"))"
+      && google_logging_log_view.containers.parent == "projects/example-project-1"
+      && google_logging_log_view.containers.bucket == "_Default"
+      && google_logging_log_view.containers.name == "containers"
+    )
+    error_message = "The view may show what containers on Cloud Run print, and nothing else."
+  }
+
+  assert {
+    condition = (
+      google_logging_log_view_iam_member.apply.role == "roles/logging.viewAccessor"
+      && google_logging_log_view_iam_member.apply.name == "containers"
+      && google_logging_log_view_iam_member.apply.bucket == "_Default"
+      && google_logging_log_view_iam_member.apply.parent == "projects/example-project-1"
+    )
+    error_message = "Apply may read that one view."
+  }
+
+  # On the project, the same role would open every view.
+  assert {
+    condition = length(setintersection(
+      toset(concat(local.apply_roles, local.grantable_roles, local.more_grantable_roles)),
+      toset(["roles/logging.admin", "roles/logging.privateLogViewer", "roles/logging.viewAccessor", "roles/logging.viewer"]),
+    )) == 0
+    error_message = "Nobody may be given a role for all logs of the project."
   }
 }
 
@@ -297,7 +331,7 @@ run "cost" {
   assert {
     condition = alltrue([
       for m in concat(
-        [for m in concat(values(google_project_iam_member.apply), values(google_project_iam_member.read), [google_project_iam_member.delete, google_project_iam_member.apply_service_accounts, google_project_iam_member.apply_grants, google_project_iam_member.apply_more_grants, google_project_iam_member.census]) : m.member],
+        [for m in concat(values(google_project_iam_member.apply), values(google_project_iam_member.read), [google_project_iam_member.delete, google_project_iam_member.apply_service_accounts, google_project_iam_member.apply_grants, google_project_iam_member.apply_more_grants, google_project_iam_member.census, google_logging_log_view_iam_member.apply]) : m.member],
         flatten([for b in jsondecode(google_storage_bucket_iam_policy.state.policy_data).bindings : b.members]),
       ) : !strcontains(m, "environment:cost")
     ])

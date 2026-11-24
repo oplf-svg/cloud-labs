@@ -11,7 +11,7 @@ reach AWS, Azure and Google Cloud with short-lived tokens and no stored keys, an
 | Identities | 16 IAM roles | 16 managed identities | 16 exact subjects, no service accounts |
 | State | S3 bucket, one prefix per repo | storage account, one container per repo | Cloud Storage bucket, one prefix per repo |
 | Kept apart from what the repos deploy by | IAM paths, denies and the bucket's own policy | a resource group of its own | a project of its own |
-| Resources created | 106 | 97 | 51 |
+| Resources created | 106 | 97 | 53 |
 
 Account, subscription and project ids are inputs at run time. None of them is in this repo. Budgets are not part of
 these stacks.
@@ -84,7 +84,7 @@ for r in $(jq -r 'keys[]' subjects.json); do curl -s "https://api.github.com/rep
 | | AWS | Azure | Google Cloud |
 |---|---|---|---|
 | `plan` | `SecurityAudit`, `ViewOnlyAccess` and a few more reads, account-wide | `*/read` on the repo's resource group, minus the known reads of keys, settings, logs and costs | get, list and getIamPolicy on a list of resource types, project-wide |
-| `apply` | `PowerUserAccess`, plus IAM roles that must carry a permissions boundary | Contributor on the repo's resource group but not over the group itself, plus grants of 35 named roles to service principals | 31 service roles, plus grants of 11 named roles |
+| `apply` | `PowerUserAccess`, plus IAM roles that must carry a permissions boundary | Contributor on the repo's resource group but not over the group itself, plus grants of 35 named roles to service principals | 31 service roles, plus grants of 11 named roles, and what containers on Cloud Run print |
 | `destroy` | The `plan` reads, plus delete actions | The `plan` reads, plus `*/delete` on the repo's resource group | The `plan` reads, plus delete on the same types |
 
 No tier can change this trust, hand out administrator rights, touch the state storage or another repo's state, create
