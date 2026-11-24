@@ -88,6 +88,20 @@ requests an hour per address and the check uses 25, so if a Cloud Shell is refus
 
 On AWS, not every kind of account can run this: see [Which account](aws/RUNBOOK.md#which-account).
 
+## On a Mac
+
+Once a Cloud Shell has made everything, `run.sh` also runs on a Mac with Apple silicon, signed in with the clouds' own
+tools. There it only carries on what is there: in a wrong account it stops instead of beginning anew.
+
+Whatever runs as a user of a Mac can use that user's sign-in. So it belongs into a user of its own, without administrator
+rights, where nothing else runs.
+
+| | |
+|---|---|
+| `RUN_TMP` | A folder for Terraform that only you can open. Without one, it makes one and removes it at the end |
+| `RUN_CHECKED` | A file in a closed folder. If GitHub's side was right, that holds for an hour, for the same check and the same lists. Each look asks 25 questions, and GitHub answers 60 an hour to one address |
+| `RUN_RESULTS` | A folder for a file that says how it went: the steps, the numbers of the plan, whether everything matches. No id, no name, nothing that a cloud answered. The folder must be yours alone to change |
+
 ## Secrets in GitHub
 
 [load_secrets.py](scripts/load_secrets.py) stores what each bootstrap printed, as Actions secrets in every repo. They
