@@ -51,7 +51,7 @@ elif args[0] == "apply":
 elif args[0] == "state":
     print("\n".join(f"r{i}" for i in range(conf.get("arrived", state()))))
 elif args[0] == "output":
-    print(json.dumps({"cloud": conf["cloud"], "repos": {}}) if "-json" in args else "terraform {}")
+    print(json.dumps({"cloud": conf["cloud"], "repos": conf.get("repos", {})}) if "-json" in args else "terraform {}")
 """
 
 CLOUD = r"""#!/usr/bin/env python3
@@ -304,6 +304,17 @@ class Run(unittest.TestCase):
             (self.box / "remote").write_text(str(EXPECTED[cloud]))
             self.assertEqual(self.go(cloud, bucket="tfstate-0a1b2c3d", outputs_only=True), 0, self.out)
             self.assertTrue(self.applied())
+
+    def test_the_value_for_the_costs_stands_by_itself(self):
+        names = {"aws": "AWS_ROLE_ARN", "azure": "AZURE_CLIENT_ID", "gcp": "GCP_COST_PROJECT_ID"}
+        for cloud in self.each_cloud():
+            (self.box / "remote").write_text(str(EXPECTED[cloud]))
+            repos = {"webhook-platform": {"production": {names[cloud]: "another"}}, "cloud-labs": {"production": {names[cloud]: "another"}, "cost": {names[cloud]: "the-one"}}}
+            self.assertEqual(self.go(cloud, bucket="tfstate-0a1b2c3d", outputs_only=True, repos=repos), 0, self.out)
+            self.assertIn(f"environment cost:\n\n  {names[cloud]} = the-one\n", self.out)
+            self.assertEqual(self.out.count("another"), 2)
+            self.assertEqual(self.go(cloud, bucket="tfstate-0a1b2c3d", outputs_only=True, repos={"cloud-labs": {}}), 0, self.out)
+            self.assertNotIn("environment cost", self.out)
 
     def test_carries_out_a_later_change(self):
         # As when plan came to trust another subject: everything is there already, and some of it changes in place.

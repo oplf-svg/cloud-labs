@@ -447,3 +447,8 @@ echo "--------------------------------------------------"
 terraform output -json github_secrets | fold -w 100
 echo
 echo "--------------------------------------------------"
+# The one for the costs by itself. It can be typed into GitHub's page where the clipboard of that computer does not reach.
+cost=$(terraform output -json github_secrets | jq -r '.repos["cloud-labs"].cost // {} | to_entries[] | "\(.key) = \(.value)"')
+if [ -n "$cost" ]; then
+  printf '\nIt also holds this one, for the settings of cloud-labs, environment cost:\n\n  %s\n' "$cost"
+fi
