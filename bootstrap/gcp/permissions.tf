@@ -57,8 +57,7 @@ locals {
 
   only_grantable = "api.getAttribute(\"iam.googleapis.com/modifiedGrantsByRole\", []).hasOnly(${jsonencode(local.grantable_roles)})"
 
-  # The eleventh has a grant of its own, so one request can only change one of the two lists. Terraform's provider puts
-  # requests together unless its batching is switched off.
+  # The eleventh has a grant of its own, so one request can only change one of the two lists.
   more_grantable_roles = ["roles/cloudsql.instanceUser"]
 
   only_more_grantable = "api.getAttribute(\"iam.googleapis.com/modifiedGrantsByRole\", []).hasOnly(${jsonencode(local.more_grantable_roles)})"
@@ -298,28 +297,6 @@ resource "google_project_iam_member" "apply_more_grants" {
     description = "May grant or revoke one role, with which a workload signs in to a database without a password."
     expression  = local.only_more_grantable
   }
-
-  depends_on = [google_iam_workload_identity_pool_provider.github]
-}
-
-# What containers on Cloud Run print, and why one did not start. Not who called them, and not the audit logs. This is no wall:
-# with roles/logging.configWriter, apply can change a view, as it can already send all logs somewhere else.
-resource "google_logging_log_view" "containers" {
-  parent      = "projects/${var.project_id}"
-  location    = "global"
-  bucket      = "_Default"
-  name        = "containers"
-  description = "What containers on Cloud Run print. For the apply identities."
-  filter      = "(${join(" OR ", [for type in ["job", "revision"] : "resource.type=\"cloud_run_${type}\""])}) AND (${join(" OR ", [for log in ["stderr", "stdout", "varlog/system"] : "log_id(\"run.googleapis.com/${log}\")"])})"
-}
-
-resource "google_logging_log_view_iam_member" "apply" {
-  parent   = google_logging_log_view.containers.parent
-  location = google_logging_log_view.containers.location
-  bucket   = google_logging_log_view.containers.bucket
-  name     = google_logging_log_view.containers.name
-  role     = "roles/logging.viewAccessor"
-  member   = local.tier_principals["apply"]
 
   depends_on = [google_iam_workload_identity_pool_provider.github]
 }

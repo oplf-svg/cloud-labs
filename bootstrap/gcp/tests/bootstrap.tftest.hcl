@@ -103,7 +103,7 @@ run "trust" {
       && alltrue([
         for m in concat(
           [for m in concat(values(google_project_iam_member.apply), values(google_project_iam_member.read), [google_project_iam_member.delete, google_project_iam_member.apply_service_accounts, google_project_iam_member.apply_grants, google_project_iam_member.apply_more_grants, google_project_iam_member.census]) : m.member],
-          [google_bigquery_dataset_iam_member.cost.member, google_logging_log_view_iam_member.apply.member],
+          [google_bigquery_dataset_iam_member.cost.member], [for m in values(google_logging_log_view_iam_member.apply) : m.member],
           flatten([for b in jsondecode(google_storage_bucket_iam_policy.state.policy_data).bindings : b.members]),
         ) : !strcontains(m, "/*") && !strcontains(m, "attribute.tier/none") && (!strcontains(m, "/attribute.") || can(regex("/attribute[.]tier/(plan|apply|destroy)$", m)))
       ])
@@ -218,7 +218,7 @@ run "permissions" {
 
   assert {
     condition = alltrue([
-      for m in concat(values(google_project_iam_member.apply), [google_project_iam_member.apply_service_accounts, google_project_iam_member.apply_grants, google_project_iam_member.apply_more_grants, google_logging_log_view_iam_member.apply]) :
+      for m in concat(values(google_project_iam_member.apply), [google_project_iam_member.apply_service_accounts, google_project_iam_member.apply_grants, google_project_iam_member.apply_more_grants]) :
       m.member == "principalSet://iam.googleapis.com/projects/123456789012/locations/global/workloadIdentityPools/github-actions/attribute.tier/apply"
     ])
     error_message = "Deploy rights belong to the apply tier only."
@@ -253,34 +253,37 @@ run "permissions" {
 run "logs" {
   command = apply
 
-  # Written out, because whatever this lets through stands in front of an identity whose job logs are public.
+  # Two logs and no more, each in a view of its own.
   assert {
-    condition = (
-      google_logging_log_view.containers.filter == "(resource.type=\"cloud_run_job\" OR resource.type=\"cloud_run_revision\") AND (log_id(\"run.googleapis.com/stderr\") OR log_id(\"run.googleapis.com/stdout\") OR log_id(\"run.googleapis.com/varlog/system\"))"
-      && google_logging_log_view.containers.parent == "projects/example-project-1"
-      && google_logging_log_view.containers.bucket == "_Default"
-      && google_logging_log_view.containers.name == "containers"
-    )
-    error_message = "The view may show what containers on Cloud Run print, and nothing else."
+    condition = { for name, view in google_logging_log_view.containers : name => view.filter } == {
+      stderr = "SOURCE(\"projects/example-project-1\") AND LOG_ID(\"run.googleapis.com/stderr\")"
+      stdout = "SOURCE(\"projects/example-project-1\") AND LOG_ID(\"run.googleapis.com/stdout\")"
+    }
+    error_message = "Only what the containers on Cloud Run print may be shown."
+  }
+
+  # No test with a pretended provider would notice: with a long name, the real one stops in the middle of an apply.
+  assert {
+    condition = alltrue([
+      for view in values(google_logging_log_view.containers) : view.bucket == "_Default" && view.location == "global" && view.parent == "projects/example-project-1"
+    ])
+    error_message = "A view is named by its short names."
   }
 
   assert {
-    condition = (
-      google_logging_log_view_iam_member.apply.role == "roles/logging.viewAccessor"
-      && google_logging_log_view_iam_member.apply.name == "containers"
-      && google_logging_log_view_iam_member.apply.bucket == "_Default"
-      && google_logging_log_view_iam_member.apply.parent == "projects/example-project-1"
-    )
-    error_message = "Apply may read that one view."
+    condition = { for name, member in google_logging_log_view_iam_member.apply : name => [member.parent, member.location, member.bucket, member.name, member.role, member.member] } == {
+      for name in ["stderr", "stdout"] : name => ["projects/example-project-1", "global", "_Default", "containers-${name}", "roles/logging.viewAccessor", "principalSet://iam.googleapis.com/projects/123456789012/locations/global/workloadIdentityPools/github-actions/attribute.tier/apply"]
+    }
+    error_message = "Apply, and nobody else, may read the two views."
   }
 
-  # On the project, the same role would open every view.
+  # On the project, these would open the audit log or every view.
   assert {
     condition = length(setintersection(
       toset(concat(local.apply_roles, local.grantable_roles, local.more_grantable_roles)),
-      toset(["roles/logging.admin", "roles/logging.privateLogViewer", "roles/logging.viewAccessor", "roles/logging.viewer"]),
+      toset(["roles/logging.admin", "roles/logging.fieldAccessor", "roles/logging.linkViewer", "roles/logging.privateLogViewer", "roles/logging.viewAccessor", "roles/logging.viewer"]),
     )) == 0
-    error_message = "Nobody may be given a role for all logs of the project."
+    error_message = "No role on the project may read logs."
   }
 }
 
@@ -331,7 +334,8 @@ run "cost" {
   assert {
     condition = alltrue([
       for m in concat(
-        [for m in concat(values(google_project_iam_member.apply), values(google_project_iam_member.read), [google_project_iam_member.delete, google_project_iam_member.apply_service_accounts, google_project_iam_member.apply_grants, google_project_iam_member.apply_more_grants, google_project_iam_member.census, google_logging_log_view_iam_member.apply]) : m.member],
+        [for m in concat(values(google_project_iam_member.apply), values(google_project_iam_member.read), [google_project_iam_member.delete, google_project_iam_member.apply_service_accounts, google_project_iam_member.apply_grants, google_project_iam_member.apply_more_grants, google_project_iam_member.census]) : m.member],
+        [for m in values(google_logging_log_view_iam_member.apply) : m.member],
         flatten([for b in jsondecode(google_storage_bucket_iam_policy.state.policy_data).bindings : b.members]),
       ) : !strcontains(m, "environment:cost")
     ])

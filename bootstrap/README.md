@@ -11,7 +11,7 @@ reach AWS, Azure and Google Cloud with short-lived tokens and no stored keys, an
 | Identities | 16 IAM roles | 16 managed identities | 16 exact subjects, no service accounts |
 | State | S3 bucket, one prefix per repo | storage account, one container per repo | Cloud Storage bucket, one prefix per repo |
 | Kept apart from what the repos deploy by | IAM paths, denies and the bucket's own policy | a resource group of its own | a project of its own |
-| Resources created | 106 | 97 | 53 |
+| Resources created | 106 | 97 | 55 |
 
 Account, subscription and project ids are inputs at run time. None of them is in this repo. Budgets are not part of
 these stacks.
@@ -96,6 +96,9 @@ one can only be called where somebody has set it up, and no tier can do that. Go
 
 So that its night run has a second opinion about what is left, `destroy` of `cloud-labs` may also see which resource
 groups there are on Azure, and search the whole project on Google Cloud. No other identity may.
+
+On Google Cloud, `apply` may read what containers on Cloud Run print, in two views of the logs. They keep a script from
+seeing too much by mistake. They are no wall against `apply`, which may change views and send logs elsewhere.
 
 ### The identity that reads costs
 

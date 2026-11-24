@@ -7,7 +7,7 @@ Run once, as Owner of both projects, in Cloud Shell. Nothing here needs a key, a
 | `terraform apply`, once | 1 workload identity pool and provider | bootstrap project | Free |
 | | 1 Cloud Storage bucket for state: encrypted, versioned, public access blocked | bootstrap project | Under 0.05 USD a month |
 | | 1 empty BigQuery dataset for Google's billing export, 1 custom role on it | bootstrap project | Free until 10 GB |
-| | 5 custom roles, 38 project grants, 1 view of logs with 1 grant on it | the project the repos deploy into | Free |
+| | 5 custom roles, 38 project grants, 2 views of logs with 1 grant each | the project the repos deploy into | Free |
 
 You need two projects: the one the repos deploy into, and one that holds only the trust and the state. Some of Google's
 own service agents can read every bucket in their project and run code for whoever asks, and a bucket cannot refuse
@@ -95,7 +95,7 @@ for doing it by hand.
    gcloud compute networks delete default --project "$TF_VAR_project_id"
    ```
 
-7. Plan. It must end with `Plan: 53 to add, 0 to change, 0 to destroy.` If an API says it is not enabled yet, wait a
+7. Plan. It must end with `Plan: 55 to add, 0 to change, 0 to destroy.` If an API says it is not enabled yet, wait a
    minute and try again.
 
    ```bash

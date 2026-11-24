@@ -20,7 +20,7 @@ cloud=${1:-}
 case "$cloud" in
   aws) expected=106 ;;
   azure) expected=97 ;;
-  gcp) expected=53 ;;
+  gcp) expected=55 ;;
   *)
     echo "usage: run.sh aws | azure | gcp" >&2
     exit 2
