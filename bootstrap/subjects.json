@@ -1,0 +1,27 @@
+{
+  "webhook-platform": {
+    "plan": "repo:oplf-svg@228823995/webhook-platform@1469384538:pull_request",
+    "apply": "repo:oplf-svg@228823995/webhook-platform@1469384538:environment:production",
+    "destroy": "repo:oplf-svg@228823995/webhook-platform@1469384538:environment:nightly-destroy"
+  },
+  "k8s-platform-lab": {
+    "plan": "repo:oplf-svg@228823995/k8s-platform-lab@1469385215:pull_request",
+    "apply": "repo:oplf-svg@228823995/k8s-platform-lab@1469385215:environment:production",
+    "destroy": "repo:oplf-svg@228823995/k8s-platform-lab@1469385215:environment:nightly-destroy"
+  },
+  "ai-ops-agent": {
+    "plan": "repo:oplf-svg@228823995/ai-ops-agent@1469385344:pull_request",
+    "apply": "repo:oplf-svg@228823995/ai-ops-agent@1469385344:environment:production",
+    "destroy": "repo:oplf-svg@228823995/ai-ops-agent@1469385344:environment:nightly-destroy"
+  },
+  "event-pipeline-lab": {
+    "plan": "repo:oplf-svg@228823995/event-pipeline-lab@1469385472:pull_request",
+    "apply": "repo:oplf-svg@228823995/event-pipeline-lab@1469385472:environment:production",
+    "destroy": "repo:oplf-svg@228823995/event-pipeline-lab@1469385472:environment:nightly-destroy"
+  },
+  "cloud-labs": {
+    "plan": "repo:oplf-svg@228823995/cloud-labs@1469385611:pull_request",
+    "apply": "repo:oplf-svg@228823995/cloud-labs@1469385611:environment:production",
+    "destroy": "repo:oplf-svg@228823995/cloud-labs@1469385611:environment:nightly-destroy"
+  }
+}

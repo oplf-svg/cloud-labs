@@ -1,0 +1,227 @@
+# Runs against mocked providers: no credentials, nothing is created.
+
+mock_provider "azurerm" {
+  mock_data "azurerm_client_config" {
+    defaults = {
+      object_id = "00000000-0000-0000-0000-00000000000a"
+      tenant_id = "00000000-0000-0000-0000-00000000000b"
+    }
+  }
+  mock_resource "azurerm_storage_account" {
+    defaults = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-github-bootstrap/providers/Microsoft.Storage/storageAccounts/tfstate0a1b2c3d" }
+  }
+  mock_resource "azurerm_resource_group" {
+    defaults = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/mock" }
+  }
+  mock_resource "azurerm_user_assigned_identity" {
+    defaults = {
+      id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-github-bootstrap/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mock"
+      principal_id = "00000000-0000-0000-0000-00000000000c"
+    }
+  }
+  mock_resource "azurerm_role_definition" {
+    defaults = { role_definition_resource_id = "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.Authorization/roleDefinitions/00000000-0000-0000-0000-00000000000d" }
+  }
+}
+
+mock_provider "random" {
+  mock_resource "random_id" {
+    defaults = { hex = "0a1b2c3d" }
+  }
+}
+
+variables {
+  subscription_id = "00000000-0000-0000-0000-000000000000"
+
+  # Written out again here on purpose, so that a change to subjects.json fails the test.
+  repo_ids = {
+    webhook-platform   = 1469384538
+    k8s-platform-lab   = 1469385215
+    ai-ops-agent       = 1469385344
+    event-pipeline-lab = 1469385472
+    cloud-labs         = 1469385611
+  }
+  suffixes = {
+    plan    = "pull_request"
+    apply   = "environment:production"
+    destroy = "environment:nightly-destroy"
+  }
+}
+
+run "trust" {
+  command = apply
+
+  assert {
+    condition = { for key, c in azurerm_federated_identity_credential.ci : key => c.subject } == merge([
+      for repo, id in var.repo_ids : { for tier, suffix in var.suffixes : "${repo}/${tier}" => "repo:oplf-svg@228823995/${repo}@${id}:${suffix}" }
+    ]...)
+    error_message = "Every identity must trust exactly one literal subject, for its own repo and tier."
+  }
+
+  assert {
+    condition     = length(azurerm_user_assigned_identity.ci) == 15 && length(azurerm_federated_identity_credential.ci) == 15
+    error_message = "Five repos with three tiers each make 15 identities with one credential each."
+  }
+
+  assert {
+    condition = alltrue([
+      for c in azurerm_federated_identity_credential.ci :
+      c.issuer == "https://token.actions.githubusercontent.com" && c.audience == tolist(["api://AzureADTokenExchange"]) && !strcontains(c.subject, "*")
+    ])
+    error_message = "Credentials must use GitHub's issuer, the Entra audience and no wildcards."
+  }
+
+  assert {
+    condition     = { for key, i in azurerm_user_assigned_identity.ci : key => i.name } == { for key in keys(azurerm_user_assigned_identity.ci) : key => "id-gha-${replace(key, "/", "-")}" }
+    error_message = "Each identity must be named after its own repo and tier."
+  }
+}
+
+run "permissions" {
+  command = apply
+
+  assert {
+    condition     = azurerm_role_definition.plan.permissions[0].actions == tolist(["*/read"])
+    error_message = "The plan role may only read."
+  }
+
+  assert {
+    condition     = azurerm_role_definition.destroy.permissions[0].actions == tolist(["*/read", "*/delete"])
+    error_message = "The destroy role may only read and delete."
+  }
+
+  assert {
+    condition     = contains(azurerm_role_definition.destroy.permissions[0].not_actions, "Microsoft.Resources/subscriptions/resourceGroups/delete")
+    error_message = "The destroy role must not delete the resource group, because its roles are assigned there."
+  }
+
+  assert {
+    condition = alltrue([
+      for r in [azurerm_role_definition.plan, azurerm_role_definition.destroy] : alltrue([
+        for a in [
+          "Microsoft.Consumption/*",
+          "Microsoft.DocumentDB/databaseAccounts/readonlykeys/read",
+          "Microsoft.Insights/eventtypes/*",
+          "Microsoft.Insights/logs/*",
+          "Microsoft.OperationalInsights/workspaces/query/*",
+          "Microsoft.OperationalInsights/workspaces/sharedKeys/read",
+          "Microsoft.Web/sites/config/web/connectionstrings/read",
+          "Microsoft.Web/sites/functions/masterkey/read",
+          "Microsoft.Web/sites/hostruntime/*",
+        ] : contains(r.permissions[0].not_actions, a)
+      ])
+    ])
+    error_message = "Plan and destroy must not read keys, settings, logs or costs."
+  }
+
+  assert {
+    condition = alltrue([
+      for r in [azurerm_role_definition.plan, azurerm_role_definition.apply, azurerm_role_definition.destroy, azurerm_role_definition.register] : alltrue([
+        for a in concat(r.permissions[0].actions, r.permissions[0].not_actions) : length(regexall("[*]", a)) <= 1
+      ])
+    ])
+    error_message = "Azure allows one wildcard in an action."
+  }
+
+  assert {
+    condition = (
+      azurerm_role_definition.apply.permissions[0].actions == tolist(["*"])
+      && alltrue([
+        for a in ["Microsoft.Authorization/*/Delete", "Microsoft.Authorization/*/Write", "Microsoft.Authorization/elevateAccess/Action", "Microsoft.Resources/subscriptions/resourceGroups/delete"] :
+        contains(azurerm_role_definition.apply.permissions[0].not_actions, a)
+      ])
+      && alltrue([for a in azurerm_role_assignment.apply : a.role_definition_id == azurerm_role_definition.apply.role_definition_resource_id])
+    )
+    error_message = "Apply is Contributor without the right to delete the resource group."
+  }
+
+  assert {
+    condition     = length(azurerm_role_assignment.plan) == 5 && length(azurerm_role_assignment.apply) == 5 && length(azurerm_role_assignment.destroy) == 5
+    error_message = "Each repo has one assignment per tier on its own resource group."
+  }
+
+  assert {
+    condition = alltrue([
+      for a in azurerm_role_assignment.apply_grants :
+      a.condition_version == "2.0"
+      && strcontains(a.condition, "!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})")
+      && strcontains(a.condition, "!(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'})")
+      && length(a.condition) < 8192
+      && !strcontains(a.condition, "\n")
+    ])
+    error_message = "Apply may grant roles only under a condition that covers adding and removing."
+  }
+
+  # Owner, Contributor, Reader, User Access Administrator, RBAC Administrator, Key Vault Data Access Administrator.
+  assert {
+    condition = alltrue([
+      for id in ["8e3af657-a8ff-443c-a75c-2fe8c4bcb635", "b24988ac-6180-42a0-ab88-20f7382dd24c", "acdd72a7-3385-48ef-bd42-f606fba81ae7", "18d7d88d-d35e-4fb5-a5c3-7773c20a72d9", "f58310d9-a9f6-439a-9e8d-f62e7b41a168", "8b54135c-b56d-4d72-a534-26097cfdc8d8"] :
+      alltrue([for a in azurerm_role_assignment.apply_grants : !strcontains(a.condition, id)])
+    ])
+    error_message = "Roles that administer access, and the pipelines' own roles, must not be grantable."
+  }
+
+  assert {
+    condition     = alltrue([for a in azurerm_role_assignment.destroy : strcontains(a.condition, "roleAssignments/delete") && !strcontains(a.condition, "roleAssignments/write")])
+    error_message = "Destroy may remove only the grants that apply could have made."
+  }
+}
+
+run "state" {
+  command = apply
+
+  assert {
+    condition = (
+      !azurerm_storage_account.state.allow_nested_items_to_be_public
+      && !azurerm_storage_account.state.shared_access_key_enabled
+      && !azurerm_storage_account.state.local_user_enabled
+      && azurerm_storage_account.state.https_traffic_only_enabled
+      && azurerm_storage_account.state.min_tls_version == "TLS1_2"
+      && azurerm_storage_account.state.blob_properties[0].versioning_enabled
+    )
+    error_message = "The state account must block public access and keys, require TLS 1.2 and keep versions."
+  }
+
+  assert {
+    condition     = alltrue([for c in azurerm_storage_container.state : c.container_access_type == "private"])
+    error_message = "Containers must be private."
+  }
+
+  assert {
+    condition     = toset(keys(azurerm_storage_container.state)) == toset(concat(keys(var.repo_ids), ["bootstrap"]))
+    error_message = "One container per repo, plus one for this stack."
+  }
+
+  assert {
+    condition = alltrue([
+      for key, a in azurerm_role_assignment.state :
+      endswith(a.scope, "/blobServices/default/containers/${split("/", key)[0]}")
+      && a.role_definition_name == (endswith(key, "/plan") ? "Storage Blob Data Reader" : "Storage Blob Data Contributor")
+    ])
+    error_message = "An identity may only reach its own repo's container, and plan may only read it."
+  }
+
+  assert {
+    condition     = azurerm_management_lock.bootstrap[0].lock_level == "CanNotDelete"
+    error_message = "The bootstrap group must be locked against deletion."
+  }
+}
+
+run "rejects_a_wrong_subscription_id" {
+  command         = plan
+  expect_failures = [var.subscription_id]
+
+  variables {
+    subscription_id = "my-subscription"
+  }
+}
+
+run "rejects_wildcard_extras" {
+  command         = plan
+  expect_failures = [var.plan_extra, var.destroy_extra]
+
+  variables {
+    plan_extra    = ["Microsoft.Web/*"]
+    destroy_extra = ["Microsoft.Authorization/roleAssignments/write"]
+  }
+}
