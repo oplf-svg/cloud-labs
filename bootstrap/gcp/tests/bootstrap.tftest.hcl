@@ -102,7 +102,7 @@ run "trust" {
       && toset(keys(local.tier_principals)) == toset(["plan", "apply", "destroy"])
       && alltrue([
         for m in concat(
-          [for m in concat(values(google_project_iam_member.apply), values(google_project_iam_member.read), [google_project_iam_member.delete, google_project_iam_member.apply_service_accounts, google_project_iam_member.apply_grants, google_project_iam_member.census]) : m.member],
+          [for m in concat(values(google_project_iam_member.apply), values(google_project_iam_member.read), [google_project_iam_member.delete, google_project_iam_member.apply_service_accounts, google_project_iam_member.apply_grants, google_project_iam_member.apply_more_grants, google_project_iam_member.census]) : m.member],
           [google_bigquery_dataset_iam_member.cost.member],
           flatten([for b in jsondecode(google_storage_bucket_iam_policy.state.policy_data).bindings : b.members]),
         ) : !strcontains(m, "/*") && !strcontains(m, "attribute.tier/none") && (!strcontains(m, "/attribute.") || can(regex("/attribute[.]tier/(plan|apply|destroy)$", m)))
@@ -184,7 +184,12 @@ run "permissions" {
   # Google refuses a longer list.
   assert {
     condition     = length(local.grantable_roles) <= 10 && length(local.grantable_roles) == length(toset(local.grantable_roles))
-    error_message = "At most ten roles can be grantable."
+    error_message = "At most ten roles can be grantable in one list."
+  }
+
+  assert {
+    condition     = local.more_grantable_roles == ["roles/cloudsql.instanceUser"] && length(setintersection(toset(local.more_grantable_roles), toset(local.grantable_roles))) == 0
+    error_message = "The second list holds one role, which is not in the first."
   }
 
   # setIamPolicy appears in one role only, and that role is granted only under the condition.
@@ -192,6 +197,7 @@ run "permissions" {
     condition = (
       length([for r in [google_project_iam_custom_role.read, google_project_iam_custom_role.delete, google_project_iam_custom_role.service_accounts] : r if length([for p in r.permissions : p if can(regex("(?i)setIamPolicy|actAs", p))]) > 0]) == 0
       && length(google_project_iam_member.apply_grants.condition) == 1
+      && length(google_project_iam_member.apply_more_grants.condition) == 1
     )
     error_message = "Changing access must always be limited by the condition."
   }
@@ -212,7 +218,7 @@ run "permissions" {
 
   assert {
     condition = alltrue([
-      for m in concat(values(google_project_iam_member.apply), [google_project_iam_member.apply_service_accounts, google_project_iam_member.apply_grants]) :
+      for m in concat(values(google_project_iam_member.apply), [google_project_iam_member.apply_service_accounts, google_project_iam_member.apply_grants, google_project_iam_member.apply_more_grants]) :
       m.member == "principalSet://iam.googleapis.com/projects/123456789012/locations/global/workloadIdentityPools/github-actions/attribute.tier/apply"
     ])
     error_message = "Deploy rights belong to the apply tier only."
@@ -220,20 +226,24 @@ run "permissions" {
 
   assert {
     condition = length(setintersection(
-      toset(concat(local.apply_roles, local.grantable_roles)),
+      toset(concat(local.apply_roles, local.grantable_roles, local.more_grantable_roles)),
       toset(["roles/owner", "roles/editor", "roles/viewer", "roles/admin", "roles/writer", "roles/compute.admin", "roles/bigquery.admin", "roles/aiplatform.admin", "roles/iam.admin", "roles/iam.securityAdmin", "roles/iam.serviceAccountAdmin", "roles/iam.serviceAccountKeyAdmin", "roles/iam.serviceAccountTokenCreator", "roles/iam.workloadIdentityPoolAdmin", "roles/resourcemanager.projectIamAdmin"]),
     )) == 0
     error_message = "Roles that administer access must be neither held nor grantable."
   }
 
   assert {
-    condition     = startswith(google_project_iam_member.apply_grants.condition[0].expression, "api.getAttribute(\"iam.googleapis.com/modifiedGrantsByRole\", []).hasOnly([")
+    condition = (
+      startswith(google_project_iam_member.apply_grants.condition[0].expression, "api.getAttribute(\"iam.googleapis.com/modifiedGrantsByRole\", []).hasOnly([")
+      && google_project_iam_member.apply_more_grants.condition[0].expression == "api.getAttribute(\"iam.googleapis.com/modifiedGrantsByRole\", []).hasOnly([\"roles/cloudsql.instanceUser\"])"
+      && google_project_iam_member.apply_more_grants.role == google_project_iam_custom_role.project_grants.id
+    )
     error_message = "Apply may change project access only under a condition."
   }
 
   assert {
     condition = alltrue([
-      for m in concat(values(google_project_iam_member.apply), values(google_project_iam_member.read), [google_project_iam_member.delete, google_project_iam_member.apply_service_accounts, google_project_iam_member.apply_grants, google_project_iam_member.census]) :
+      for m in concat(values(google_project_iam_member.apply), values(google_project_iam_member.read), [google_project_iam_member.delete, google_project_iam_member.apply_service_accounts, google_project_iam_member.apply_grants, google_project_iam_member.apply_more_grants, google_project_iam_member.census]) :
       m.project == "example-project-1"
     ])
     error_message = "No pipeline may have a project role in the bootstrap project."
@@ -287,7 +297,7 @@ run "cost" {
   assert {
     condition = alltrue([
       for m in concat(
-        [for m in concat(values(google_project_iam_member.apply), values(google_project_iam_member.read), [google_project_iam_member.delete, google_project_iam_member.apply_service_accounts, google_project_iam_member.apply_grants, google_project_iam_member.census]) : m.member],
+        [for m in concat(values(google_project_iam_member.apply), values(google_project_iam_member.read), [google_project_iam_member.delete, google_project_iam_member.apply_service_accounts, google_project_iam_member.apply_grants, google_project_iam_member.apply_more_grants, google_project_iam_member.census]) : m.member],
         flatten([for b in jsondecode(google_storage_bucket_iam_policy.state.policy_data).bindings : b.members]),
       ) : !strcontains(m, "environment:cost")
     ])

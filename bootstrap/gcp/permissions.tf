@@ -57,6 +57,12 @@ locals {
 
   only_grantable = "api.getAttribute(\"iam.googleapis.com/modifiedGrantsByRole\", []).hasOnly(${jsonencode(local.grantable_roles)})"
 
+  # The eleventh has a grant of its own, so one request can only change one of the two lists. Terraform's provider puts
+  # requests together unless its batching is switched off.
+  more_grantable_roles = ["roles/cloudsql.instanceUser"]
+
+  only_more_grantable = "api.getAttribute(\"iam.googleapis.com/modifiedGrantsByRole\", []).hasOnly(${jsonencode(local.more_grantable_roles)})"
+
   # Service => resource types. Plan reads their configuration. Destroy can also delete them.
   resource_types = {
     aiplatform         = ["batchPredictionJobs", "customJobs", "datasets", "deploymentResourcePools", "endpoints", "featureGroups", "featureOnlineStores", "featureViews", "indexEndpoints", "indexes", "models", "pipelineJobs", "reasoningEngines", "schedules", "tensorboards", "trainingPipelines"]
@@ -277,6 +283,20 @@ resource "google_project_iam_member" "apply_grants" {
     title       = "only-workload-roles"
     description = "May grant or revoke a fixed list of roles. None of them administers access."
     expression  = local.only_grantable
+  }
+
+  depends_on = [google_iam_workload_identity_pool_provider.github]
+}
+
+resource "google_project_iam_member" "apply_more_grants" {
+  project = var.project_id
+  role    = google_project_iam_custom_role.project_grants.id
+  member  = local.tier_principals["apply"]
+
+  condition {
+    title       = "only-database-sign-in"
+    description = "May grant or revoke one role, with which a workload signs in to a database without a password."
+    expression  = local.only_more_grantable
   }
 
   depends_on = [google_iam_workload_identity_pool_provider.github]
