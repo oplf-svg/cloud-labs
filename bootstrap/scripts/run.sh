@@ -25,6 +25,7 @@ esac
 scripts=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 cd "$scripts/../$cloud"
 work=${RUN_TMP:-/tmp}
+terminal=${RUN_TERMINAL:-/dev/tty}
 trap 'rm -f tfplan' EXIT
 
 step() { printf '\n== %s\n' "$*"; }
@@ -34,17 +35,24 @@ stop() {
   exit 1
 }
 
+# Throws away what was typed before a question is on the screen. It cannot be an answer to it.
+forget_typing() {
+  python3 -c 'import termios; termios.tcflush(0, termios.TCIFLUSH)' 2> /dev/null < "$terminal" || true
+}
+
 confirm() {
   local answer=""
+  forget_typing
   printf '\n%s\nType yes to go on: ' "$1"
-  read -r answer < "${RUN_TERMINAL:-/dev/tty}" || true
+  read -r answer < "$terminal" || true
   [ "$answer" = yes ]
 }
 
 ask() {
   local answer=""
+  forget_typing
   printf '%s' "$1" >&2
-  read -r answer < "${RUN_TERMINAL:-/dev/tty}" || true
+  read -r answer < "$terminal" || true
   printf '%s' "$answer"
 }
 

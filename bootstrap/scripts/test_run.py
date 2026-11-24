@@ -3,9 +3,14 @@
 import json
 import os
 import pathlib
+import pty
+import re
+import select
 import shutil
+import signal
 import subprocess
 import tempfile
+import time
 import unittest
 
 BOOTSTRAP = pathlib.Path(__file__).resolve().parent.parent
@@ -106,24 +111,58 @@ class Run(unittest.TestCase):
         path.write_text(text)
         path.chmod(0o755)
 
-    def go(self, cloud, answer="yes", github=0, **conf):
+    def prepare(self, cloud, github=0, **conf):
         total = conf.pop("total", EXPECTED[cloud])
         (self.box / "conf.json").write_text(json.dumps({"cloud": cloud, "total": total, "subjects": SUBJECTS, **conf}))
-        (self.box / "answer").write_text(answer + "\n")
         self.tool(self.box / "bootstrap/scripts/github_checks.py", f"#!/usr/bin/env python3\nraise SystemExit({github})\n")
-        env = {
+        return ["bash", str(self.box / "bootstrap/scripts/run.sh"), cloud], {
             **os.environ,
             "BOX": str(self.box),
             "PATH": f"{self.box}/bin:{os.environ['PATH']}",
             "RUN_TMP": str(self.box / "tmp"),
-            "RUN_TERMINAL": str(self.box / "answer"),
             "RUN_WAIT": "0",
             "TF_VAR_project_id": "example-project-1",
             "TF_VAR_bootstrap_project_id": "example-bootstrap-1",
         }
-        done = subprocess.run(["bash", str(self.box / "bootstrap/scripts/run.sh"), cloud], env=env, capture_output=True, text=True)
+
+    def go(self, cloud, answer="yes", github=0, **conf):
+        command, env = self.prepare(cloud, github, **conf)
+        (self.box / "answer").write_text(answer + "\n")
+        env["RUN_TERMINAL"] = str(self.box / "answer")
+        done = subprocess.run(command, env=env, capture_output=True, text=True)
         self.out = done.stdout + done.stderr
         return done.returncode
+
+    def type(self, cloud, early, *answers, without=()):
+        """Runs it at a real terminal. Types `early` at once, and the next answer whenever it asks something."""
+        command, env = self.prepare(cloud)
+        for name in without:
+            del env[name]
+        child, terminal = pty.fork()
+        if child == 0:
+            try:
+                os.execvpe(command[0], command, env)
+            finally:
+                os._exit(2)
+        os.write(terminal, early.encode())
+        self.out, given, deadline = "", 0, time.monotonic() + 60
+        while time.monotonic() < deadline:
+            if not select.select([terminal], [], [], 1)[0]:
+                continue
+            try:
+                data = os.read(terminal, 4096)
+            except OSError:  # How Linux says that the other side is gone.
+                break
+            if not data:
+                break
+            self.out += data.decode(errors="replace")
+            if len(re.findall("Type yes to go on: |Id of the [^:]*: ", self.out)) > given and given < len(answers):
+                os.write(terminal, answers[given].encode())
+                given += 1
+        else:
+            os.kill(child, signal.SIGKILL)
+        os.close(terminal)
+        return os.waitstatus_to_exitcode(os.waitpid(child, 0)[1])
 
     @property
     def stack(self):
@@ -163,6 +202,28 @@ class Run(unittest.TestCase):
                 self.assertEqual(self.go(cloud, answer=answer), 1)
                 self.assertFalse(self.applied())
                 self.assertFalse((self.stack / "tfplan").exists())
+
+    def test_what_is_typed_early_is_no_answer(self):
+        # A second yes to the first question, or an Enter too many, comes long before the plan is on the screen.
+        for cloud, early, answers in (("aws", "yes\n", ["no\n"]), ("gcp", "", ["yes\nyes\n", "no\n"])):
+            with self.subTest(cloud):
+                self.setUp()
+                self.assertEqual(self.type(cloud, early, *answers), 1, self.out)
+                self.assertIn("Nothing was changed", self.out)
+                self.assertFalse(self.applied())
+
+    def test_what_is_typed_early_does_not_spoil_the_answer(self):
+        for early in ("\n", "ye", "no\nno"):
+            with self.subTest(early):
+                self.setUp()
+                self.assertEqual(self.type("aws", early, "yes\n"), 0, self.out)
+                self.assertTrue(self.applied())
+
+    def test_what_is_typed_early_is_no_project(self):
+        names = ("TF_VAR_project_id", "TF_VAR_bootstrap_project_id")
+        answers = ("example-project-1\n", "example-bootstrap-1\n", "yes\n", "no\n")
+        self.assertEqual(self.type("gcp", "another-project-1\n", *answers, without=names), 1, self.out)
+        self.assertIn("Google Cloud projects example-project-1 and example-bootstrap-1", self.out)
 
     def test_github_side_comes_first(self):
         for cloud in self.each_cloud():
