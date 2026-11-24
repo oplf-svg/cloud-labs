@@ -4,7 +4,7 @@ Run once, as Owner of the subscription, in Cloud Shell. Nothing here needs a key
 
 | You run | It creates | Cost |
 |---|---|---|
-| `terraform apply`, once | 16 managed identities with one federated credential each, 5 custom roles, 42 role assignments | Free |
+| `terraform apply`, once | 16 managed identities with one federated credential each, 6 custom roles, 43 role assignments | Free |
 | | 1 resource group for the bootstrap, locked against deletion, and 1 empty one per repo | Free |
 | | 1 storage account for state, 6 containers: encrypted, versioned, no public access, no keys | Under 0.05 USD a month |
 
@@ -53,7 +53,7 @@ for doing it by hand.
    export PATH=/tmp/tf-bin:$PATH TF_DATA_DIR=/tmp/tf-azure TF_VAR_subscription_id=$(az account show --query id --output tsv)
    ```
 
-6. Plan. It must end with `Plan: 95 to add, 0 to change, 0 to destroy.` If Terraform cannot get a token, run `az login`
+6. Plan. It must end with `Plan: 97 to add, 0 to change, 0 to destroy.` If Terraform cannot get a token, run `az login`
    and try again.
 
    ```bash

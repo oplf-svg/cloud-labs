@@ -14,7 +14,7 @@ import time
 import unittest
 
 BOOTSTRAP = pathlib.Path(__file__).resolve().parent.parent
-EXPECTED = {"aws": 106, "azure": 95, "gcp": 50}
+EXPECTED = {"aws": 106, "azure": 97, "gcp": 50}
 SUBJECTS = [s for file in ("subjects.json", "cost.json") for some in json.loads((BOOTSTRAP / file).read_text()).values() for s in some.values()]
 
 TERRAFORM = r"""#!/usr/bin/env python3

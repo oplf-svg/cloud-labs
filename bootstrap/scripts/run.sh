@@ -19,7 +19,7 @@ set -euo pipefail
 cloud=${1:-}
 case "$cloud" in
   aws) expected=106 ;;
-  azure) expected=95 ;;
+  azure) expected=97 ;;
   gcp) expected=50 ;;
   *)
     echo "usage: run.sh aws | azure | gcp" >&2

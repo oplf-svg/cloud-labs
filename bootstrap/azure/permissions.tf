@@ -196,6 +196,26 @@ resource "azurerm_role_definition" "register" {
   }
 }
 
+# A second opinion for the night run of cloud-labs: every other identity only sees the group of its own repo.
+resource "azurerm_role_definition" "census" {
+  name              = "GitHub Actions census"
+  description       = "Sees which resource groups there are. Only for the night run of cloud-labs."
+  scope             = local.subscription
+  assignable_scopes = [local.subscription]
+
+  permissions {
+    actions     = ["Microsoft.Resources/subscriptions/resourceGroups/read"]
+    not_actions = []
+  }
+}
+
+resource "azurerm_role_assignment" "census" {
+  scope              = local.subscription
+  role_definition_id = azurerm_role_definition.census.role_definition_resource_id
+  principal_id       = azurerm_user_assigned_identity.ci["cloud-labs/destroy"].principal_id
+  principal_type     = "ServicePrincipal"
+}
+
 resource "azurerm_role_assignment" "plan" {
   for_each = local.by_tier.plan
 

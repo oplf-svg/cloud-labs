@@ -38,6 +38,21 @@ override_resource {
   values = { role_definition_resource_id = "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.Authorization/roleDefinitions/00000000-0000-0000-0000-00000000000f" }
 }
 
+# So has the census role, and so has the one identity that may hold it.
+override_resource {
+  target = azurerm_role_definition.census
+  values = { role_definition_resource_id = "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.Authorization/roleDefinitions/00000000-0000-0000-0000-000000000010" }
+}
+
+override_resource {
+  target = azurerm_user_assigned_identity.ci["cloud-labs/destroy"]
+  values = {
+    id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-github-bootstrap/providers/Microsoft.ManagedIdentity/userAssignedIdentities/destroy"
+    principal_id = "00000000-0000-0000-0000-000000000011"
+    client_id    = "00000000-0000-0000-0000-000000000012"
+  }
+}
+
 mock_provider "random" {
   mock_resource "random_id" {
     defaults = { hex = "0a1b2c3d" }
@@ -136,7 +151,7 @@ run "permissions" {
 
   assert {
     condition = alltrue([
-      for r in [azurerm_role_definition.plan, azurerm_role_definition.apply, azurerm_role_definition.destroy, azurerm_role_definition.register, azurerm_role_definition.cost] : alltrue([
+      for r in [azurerm_role_definition.plan, azurerm_role_definition.apply, azurerm_role_definition.destroy, azurerm_role_definition.register, azurerm_role_definition.cost, azurerm_role_definition.census] : alltrue([
         for a in concat(r.permissions[0].actions, r.permissions[0].not_actions) : length(regexall("[*]", a)) <= 1
       ])
     ])
@@ -184,6 +199,40 @@ run "permissions" {
   assert {
     condition     = alltrue([for a in azurerm_role_assignment.destroy : strcontains(a.condition, "roleAssignments/delete") && !strcontains(a.condition, "roleAssignments/write")])
     error_message = "Destroy may remove only the grants that apply could have made."
+  }
+}
+
+run "census" {
+  command = apply
+
+  assert {
+    condition = (
+      azurerm_role_definition.census.permissions[0].actions == tolist(["Microsoft.Resources/subscriptions/resourceGroups/read"])
+      && length(azurerm_role_definition.census.permissions) == 1
+      && try(length(azurerm_role_definition.census.permissions[0].data_actions), 0) == 0
+      && azurerm_role_definition.census.scope == "/subscriptions/00000000-0000-0000-0000-000000000000"
+    )
+    error_message = "The census role may see which resource groups there are, and nothing that is in them."
+  }
+
+  # The subject is written out, so that another identity in that place fails the test.
+  assert {
+    condition = (
+      azurerm_role_assignment.census.scope == "/subscriptions/00000000-0000-0000-0000-000000000000"
+      && azurerm_role_assignment.census.role_definition_id == azurerm_role_definition.census.role_definition_resource_id
+      && [for key, i in azurerm_user_assigned_identity.ci : azurerm_federated_identity_credential.ci[key].subject if i.principal_id == azurerm_role_assignment.census.principal_id] == ["repo:oplf-svg@228823995/cloud-labs@1469385611:environment:nightly-destroy:ref:refs/heads/main"]
+    )
+    error_message = "Only the destroy identity of cloud-labs may see the other resource groups."
+  }
+
+  # Nobody else holds that role, and that identity has nothing else outside its own group.
+  assert {
+    condition = alltrue([
+      for a in concat(values(azurerm_role_assignment.plan), values(azurerm_role_assignment.apply), values(azurerm_role_assignment.apply_grants), values(azurerm_role_assignment.apply_register), values(azurerm_role_assignment.destroy), values(azurerm_role_assignment.state), [azurerm_role_assignment.cost]) :
+      a.role_definition_id != azurerm_role_definition.census.role_definition_resource_id
+      && (a.principal_id != azurerm_role_assignment.census.principal_id || a.scope != azurerm_role_assignment.census.scope)
+    ])
+    error_message = "The census role must be in one assignment only, and its identity in no other one on the subscription."
   }
 }
 

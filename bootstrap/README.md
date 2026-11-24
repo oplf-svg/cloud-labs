@@ -11,7 +11,7 @@ reach AWS, Azure and Google Cloud with short-lived tokens and no stored keys, an
 | Identities | 16 IAM roles | 16 managed identities | 16 exact subjects, no service accounts |
 | State | S3 bucket, one prefix per repo | storage account, one container per repo | Cloud Storage bucket, one prefix per repo |
 | Kept apart from what the repos deploy by | IAM paths, denies and the bucket's own policy | a resource group of its own | a project of its own |
-| Resources created | 106 | 95 | 50 |
+| Resources created | 106 | 97 | 50 |
 
 Account, subscription and project ids are inputs at run time. None of them is in this repo. Budgets are not part of
 these stacks.
@@ -91,8 +91,8 @@ No tier can change this trust, hand out administrator rights, touch the state st
 sign-in keys or passwords for an identity, buy commitments, accept the terms of a model or of AWS Marketplace, change a
 flat-rate plan of CloudFront or read billing data.
 
-On Google Cloud, `destroy` of `cloud-labs` may also search the whole project, so that its night run has a second opinion
-about what is left. No other identity may.
+So that its night run has a second opinion about what is left, `destroy` of `cloud-labs` may also see which resource
+groups there are on Azure, and search the whole project on Google Cloud. No other identity may.
 
 ### The identity that reads costs
 

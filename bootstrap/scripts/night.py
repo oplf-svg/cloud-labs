@@ -47,7 +47,7 @@ from night_github import night_github
 STACKS = pathlib.Path(__file__).resolve().parents[2] / "stacks.json"
 STAYS, DESTROYED = "stays", "destroyed"
 
-# The one right that only the destroy identity of this repo has, so that its night can look at the whole project.
+# Only the destroy identity of this repo may look further than its own things, so that its night has a second opinion.
 SEARCHER, SEARCH = "cloud-labs", "cloudasset.assets.searchAllResources"
 
 
@@ -144,11 +144,13 @@ def night_azure(repo, token, env, run, send, nights):
     yield f"sign in as id-gha-{repo}-destroy", ALLOWED, got
     if got != ALLOWED:
         return
-    group = f"https://management.azure.com/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/rg-{repo}"
+    groups = f"https://management.azure.com/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups"
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
     empty = json.dumps({"properties": {"mode": "Incremental", "template": AZURE_TEMPLATE}}).encode()
-    check = f"{group}/providers/Microsoft.Resources/deployments/{NAME}/validate?api-version=2021-04-01"
+    check = f"{groups}/rg-{repo}/providers/Microsoft.Resources/deployments/{NAME}/validate?api-version=2021-04-01"
     yield "prepare a deployment", DENIED, azure(*send("POST", check, headers, empty))
+    foreign = f"{groups}/rg-github-bootstrap?api-version=2021-04-01"
+    yield "see the other resource groups", ALLOWED if repo == SEARCHER else DENIED, azure(*send("GET", foreign, headers))
 
     key, got = sign_in("https://storage.azure.com")
     yield "sign in to the state storage", ALLOWED, got
