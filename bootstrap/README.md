@@ -99,6 +99,7 @@ rights, where nothing else runs.
 | | |
 |---|---|
 | `RUN_TMP` | A folder for Terraform that only you can open. Without one, it makes one and removes it at the end |
+| `RUN_CHECKED` | A file in a closed folder. If GitHub's side was right, that holds for an hour, for the same check and the same lists. Each look asks 25 questions, and GitHub answers 60 an hour to one address |
 | `RUN_RESULTS` | A folder for a file that says how it went: the steps, the numbers of the plan, whether everything matches. No id, no name, nothing that a cloud answered. The folder must be yours alone to change |
 
 ## Secrets in GitHub

@@ -9,7 +9,8 @@
 # step.
 #
 # On a Mac it only carries on what is there already. RUN_TMP is a folder for Terraform that nobody else
-# can open, and RUN_RESULTS a folder for a file that says how it went, without an id or a name.
+# can open, RUN_RESULTS a folder for a file that says how it went, without an id or a name, and RUN_CHECKED
+# a file in a closed folder that remembers for an hour that GitHub's side was right.
 #
 # The functions are called by name, as "${cloud}_setup", which shellcheck cannot see.
 # shellcheck disable=SC2317,SC2329
@@ -29,6 +30,11 @@ esac
 scripts=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 cd "$scripts/../$cloud"
 system=$(uname -s)
+if [ "$system" = Darwin ]; then
+  # This user's own tools and Apple's. Other folders of a Mac belong to its administrators, and so to every program that
+  # runs as one of them. DEVELOPER_DIR is where Apple's git and python3 look, and not in /Applications.
+  export PATH="$HOME/tools/bin:/usr/bin:/bin:/usr/sbin:/sbin" DEVELOPER_DIR=/Library/Developer/CommandLineTools
+fi
 terminal=${RUN_TERMINAL:-/dev/tty}
 result=""
 made=""
@@ -93,6 +99,24 @@ if not stat.S_ISDIR(about.st_mode) or about.st_uid != os.getuid() or about.st_mo
 file = os.path.join(folder, time.strftime("%Y-%m-%dT%H%M%SZ-", time.gmtime()) + sys.argv[2] + ".txt")
 os.fchmod(os.open(file, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW), 0o644)
 print(file)
+EOF
+}
+
+# checked look FILE: whether the same check has found GitHub's side right within this hour, with the same lists. checked
+# keep FILE: that it has. Every look asks GitHub 25 questions, and it answers 60 an hour to one address.
+checked() {
+  python3 - "$1" "$2" "$scripts/github_checks.py" "$scripts"/../*.json << 'EOF'
+import hashlib, os, stat, sys, time
+what, file, *sources = sys.argv[1:]
+mark = hashlib.sha256(b"".join(open(source, "rb").read() for source in sources)).hexdigest()
+if what == "keep":
+    os.umask(0o077)
+    with open(file, "w") as out:
+        out.write(mark)
+    sys.exit()
+about = os.lstat(file)
+own = stat.S_ISREG(about.st_mode) and about.st_uid == os.getuid() and not about.st_mode & 0o077
+sys.exit(not (own and 0 <= time.time() - about.st_mtime < 3600 and open(file).read() == mark))
 EOF
 }
 
@@ -281,14 +305,25 @@ note "began: $(date -u +%Y-%m-%dT%H:%MZ)"
 
 step "GitHub: the environments behind the trust"
 code=0
-python3 "$scripts/github_checks.py" environments || code=$?
+remembered=${RUN_CHECKED:-}
+if [ -n "$remembered" ] && ! closed "$(dirname "$remembered")" 2> /dev/null; then
+  echo "RUN_CHECKED is not in a folder that only you can open, so nothing is remembered."
+  remembered=""
+fi
+if [ -n "$remembered" ] && checked look "$remembered" 2> /dev/null; then
+  echo "ok   it was right less than an hour ago"
+  note "GitHub was right less than an hour ago"
+else
+  python3 "$scripts/github_checks.py" environments || code=$?
+  if [ "$code" = 0 ] && [ -n "$remembered" ]; then checked keep "$remembered"; fi
+fi
 case "$code" in
   0) ;;
   3)
     if [ "$system" = Darwin ]; then
       confirm "GitHub answers no more questions from this address for up to an hour. Did this check print ok five times since the environments were last changed?" || stop "Start again in an hour. Nothing was changed."
     else
-      confirm "Have you run that check on your own computer, and did it print ok five times?" || stop "Run it there first: python3 bootstrap/scripts/github_checks.py environments"
+      confirm "Have you run that check somewhere else, for example on your own computer, and did it print ok five times?" || stop "Run it there first: python3 bootstrap/scripts/github_checks.py environments"
     fi
     ;;
   *) stop "Put the environments right first. Nothing was changed." ;;
