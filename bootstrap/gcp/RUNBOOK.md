@@ -12,7 +12,21 @@ You need two projects: the one the repos deploy into, and one that holds only th
 own service agents can read every bucket in their project and run code for whoever asks, and a bucket cannot refuse
 them. A project is free.
 
-## Run it
+## The short way
+
+Open the Google Cloud console and start **Cloud Shell**. Both projects have to exist first, see step 4. This does every
+step below. It shows the plan and asks before it creates anything, and it can be run again if it stops.
+
+```bash
+[ -d ~/cloud-labs ] || git clone https://github.com/oplf-svg/cloud-labs.git ~/cloud-labs; git -C ~/cloud-labs pull --ff-only && ~/cloud-labs/bootstrap/scripts/run.sh gcp
+```
+
+It asks for the two project ids.
+
+Then follow [Hand it to GitHub](#hand-it-to-github). The rest of this page is for checking, changing and undoing it, or
+for doing it by hand.
+
+## Run it by hand
 
 1. Open the Google Cloud console and start **Cloud Shell**. Allow it to use your account if it asks.
 
@@ -97,7 +111,7 @@ them. A project is free.
    minute and repeat from `terraform plan -out=tfplan` in step 7. What exists already is not created twice, so the
    number is smaller.
 
-9. Check that the state is in the bucket, then remove the local copy. The count must be 46.
+9. Check that the state is in the bucket, then remove the local copy. The count must be 47.
 
    ```bash
    terraform state list | wc -l
@@ -132,6 +146,22 @@ after a repo turns on a new Google service: App Engine, for one, brings an accou
 ```bash
 gcloud projects get-iam-policy "$TF_VAR_project_id" --flatten='bindings[].members' --filter='bindings.role=roles/editor' --format='value(bindings.members)'
 ```
+
+## Hand it to GitHub
+
+This prints what the repos need: ids and names, no passwords. Copy all of it. `run.sh` prints it too.
+
+```bash
+terraform output -json github_secrets | fold -w 100; echo
+```
+
+On your own computer, in your clone of this repo, with that in the clipboard:
+
+```bash
+pbpaste | python3 bootstrap/scripts/load_secrets.py
+```
+
+It checks every value, lists the names it will set, never shows a value, and asks before it writes.
 
 ## Run it again later
 

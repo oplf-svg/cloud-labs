@@ -1,6 +1,10 @@
 # Runs against mocked providers: no credentials, nothing is created.
 
 mock_provider "google" {
+  mock_data "google_project" {
+    defaults = { number = "210987654321" }
+  }
+
   mock_resource "google_iam_workload_identity_pool" {
     defaults = { name = "projects/123456789012/locations/global/workloadIdentityPools/github-actions" }
   }
@@ -246,6 +250,29 @@ run "state" {
   assert {
     condition     = length(jsondecode(google_storage_bucket_iam_policy.state.policy_data).bindings) == 18
     error_message = "Three shared bindings and one per subject."
+  }
+}
+
+run "github_secrets" {
+  command = apply
+
+  assert {
+    condition = output.github_secrets == {
+      cloud = "gcp"
+      repos = {
+        for repo, id in var.repo_ids : repo => {
+          repository = {
+            GCP_PROJECT_ID                 = "example-project-1"
+            GCP_PROJECT_NUMBER             = "210987654321"
+            GCP_STATE_BUCKET               = "tfstate-0a1b2c3d"
+            GCP_WORKLOAD_IDENTITY_PROVIDER = google_iam_workload_identity_pool_provider.github.name
+          }
+          production      = {}
+          nightly-destroy = {}
+        }
+      }
+    }
+    error_message = "Every repo gets the provider, the project it deploys into and the state bucket."
   }
 }
 

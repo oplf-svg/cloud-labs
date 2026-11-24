@@ -18,19 +18,29 @@ output "state_bucket" {
   value       = azurerm_storage_account.state.name
 }
 
-output "client_ids" {
-  description = "Client id per repo and tier, to store later as GitHub Actions secrets."
-  value       = { for key, identity in azurerm_user_assigned_identity.ci : key => identity.client_id }
-}
+output "github_secrets" {
+  description = "Input for scripts/load_secrets.py. A job in an environment gets that environment's value, any other job gets the plan identity."
+  sensitive   = true
 
-output "tenant_id" {
-  description = "Directory the identities live in."
-  value       = data.azurerm_client_config.current.tenant_id
-}
-
-output "resource_groups" {
-  description = "Resource group each repo deploys into."
-  value       = { for repo, group in azurerm_resource_group.repo : repo => group.name }
+  value = {
+    cloud = "azure"
+    repos = {
+      for repo in keys(local.subjects) : repo => {
+        repository = {
+          AZURE_CLIENT_ID       = azurerm_user_assigned_identity.ci["${repo}/plan"].client_id
+          AZURE_STATE_ACCOUNT   = azurerm_storage_account.state.name
+          AZURE_SUBSCRIPTION_ID = var.subscription_id
+          AZURE_TENANT_ID       = data.azurerm_client_config.current.tenant_id
+        }
+        production = {
+          AZURE_CLIENT_ID = azurerm_user_assigned_identity.ci["${repo}/apply"].client_id
+        }
+        nightly-destroy = {
+          AZURE_CLIENT_ID = azurerm_user_assigned_identity.ci["${repo}/destroy"].client_id
+        }
+      }
+    }
+  }
 }
 
 output "trusted_subjects" {

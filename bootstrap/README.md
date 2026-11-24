@@ -1,11 +1,11 @@
 # GitHub Actions bootstrap
 
-One Terraform stack per cloud, run once by hand from that cloud's own Cloud Shell. Together they let GitHub Actions
+One Terraform stack per cloud, run once by a person from that cloud's own Cloud Shell. Together they let GitHub Actions
 reach AWS, Azure and Google Cloud with short-lived tokens and no stored keys, and give Terraform a place to keep state.
 
 | | AWS | Azure | Google Cloud |
 |---|---|---|---|
-| How to run it | [runbook](aws/RUNBOOK.md) | [runbook](azure/RUNBOOK.md) | [runbook](gcp/RUNBOOK.md) |
+| How to run it | `run.sh aws`, [runbook](aws/RUNBOOK.md) | `run.sh azure`, [runbook](azure/RUNBOOK.md) | `run.sh gcp`, [runbook](gcp/RUNBOOK.md) |
 | Region | `eu-west-2` | `uksouth` | `europe-west2` |
 | GitHub is trusted through | an IAM OIDC provider | a federated credential on each identity | a workload identity pool and provider |
 | Identities | 15 IAM roles | 15 managed identities | 15 exact subjects, no service accounts |
@@ -81,6 +81,21 @@ python3 scripts/github_checks.py environments
 This reads GitHub's public API and must print `ok` five times. Every runbook starts with it. GitHub allows 60 anonymous
 requests an hour per address and the check uses 20, so if a Cloud Shell is refused, run it on your own computer.
 
+## Secrets in GitHub
+
+[load_secrets.py](scripts/load_secrets.py) stores what each bootstrap printed, as Actions secrets in every repo. They
+are ids, kept as secrets so that GitHub hides them in public logs. It hides a value only in jobs that use the secret, so
+give every job that talks to a cloud that cloud's ids, for example under `env`.
+
+| | In the repo | In `production` | In `nightly-destroy` |
+|---|---|---|---|
+| AWS | `AWS_ACCOUNT_ID`, `AWS_ROLE_ARN`, `AWS_STATE_BUCKET`, `AWS_WORKLOAD_BOUNDARY_ARN` | `AWS_ROLE_ARN` | `AWS_ROLE_ARN` |
+| Azure | `AZURE_CLIENT_ID`, `AZURE_STATE_ACCOUNT`, `AZURE_SUBSCRIPTION_ID`, `AZURE_TENANT_ID` | `AZURE_CLIENT_ID` | `AZURE_CLIENT_ID` |
+| Google Cloud | `GCP_PROJECT_ID`, `GCP_PROJECT_NUMBER`, `GCP_STATE_BUCKET`, `GCP_WORKLOAD_IDENTITY_PROVIDER` | | |
+
+A job gets the identity of its environment: `apply` in `production`, `destroy` in `nightly-destroy`, and `plan` anywhere
+else.
+
 ## If the nightly destroy stops
 
 GitHub turns off scheduled workflows in a public repo after 60 days without activity, and its documentation does not
@@ -107,7 +122,7 @@ python3 scripts/github_checks.py schedules
 - **State** goes under the repo's own name: key `<repo>/...` on AWS, container `<repo>` on Azure, prefix `<repo>/...` on
   Google Cloud. Keep secrets out of state.
 - **AWS roles and policies** use `path = "/workload/"`, and roles set `permissions_boundary` to the
-  `workload_boundary_arn` output. On EKS use Pod Identity, because pipelines cannot add OIDC providers.
+  `AWS_WORKLOAD_BOUNDARY_ARN` secret. On EKS use Pod Identity, because pipelines cannot add OIDC providers.
 - **Azure resources** go into the existing `rg-<repo>` group, read as data. Set `resource_provider_registrations =
   "none"`, `principal_type = "ServicePrincipal"` on role assignments, and turn off key sign-in where a service has it:
   `plan` cannot read account keys.

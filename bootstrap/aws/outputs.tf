@@ -18,14 +18,29 @@ output "state_bucket" {
   value       = aws_s3_bucket.state.bucket
 }
 
-output "role_arns" {
-  description = "Role per repo and tier, to store later as GitHub Actions secrets. They contain the account id."
-  value       = { for key, role in aws_iam_role.ci : key => role.arn }
-}
+output "github_secrets" {
+  description = "Input for scripts/load_secrets.py. A job in an environment gets that environment's value, any other job gets the plan role."
+  sensitive   = true
 
-output "workload_boundary_arn" {
-  description = "Permissions boundary that projects must set on every role they create."
-  value       = aws_iam_policy.workload_boundary.arn
+  value = {
+    cloud = "aws"
+    repos = {
+      for repo in keys(local.subjects) : repo => {
+        repository = {
+          AWS_ACCOUNT_ID            = var.account_id
+          AWS_ROLE_ARN              = aws_iam_role.ci["${repo}/plan"].arn
+          AWS_STATE_BUCKET          = aws_s3_bucket.state.bucket
+          AWS_WORKLOAD_BOUNDARY_ARN = aws_iam_policy.workload_boundary.arn
+        }
+        production = {
+          AWS_ROLE_ARN = aws_iam_role.ci["${repo}/apply"].arn
+        }
+        nightly-destroy = {
+          AWS_ROLE_ARN = aws_iam_role.ci["${repo}/destroy"].arn
+        }
+      }
+    }
+  }
 }
 
 output "trusted_subjects" {

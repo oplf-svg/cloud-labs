@@ -7,7 +7,19 @@ Run once, as an administrator, in CloudShell. Nothing here needs a key, and GitH
 | `terraform apply`, once | 1 OIDC provider, 15 roles, 5 policies and their attachments | Free |
 | | 1 S3 bucket for state: encrypted, versioned, public access blocked | Under 0.05 USD a month |
 
-## Run it
+## The short way
+
+Open the AWS console, switch the region to **Europe (London)** and open **CloudShell**. This does every step below. It
+shows the plan and asks before it creates anything, and it can be run again if it stops.
+
+```bash
+[ -d ~/cloud-labs ] || git clone https://github.com/oplf-svg/cloud-labs.git ~/cloud-labs; git -C ~/cloud-labs pull --ff-only && ~/cloud-labs/bootstrap/scripts/run.sh aws
+```
+
+Then follow [Hand it to GitHub](#hand-it-to-github). The rest of this page is for checking, changing and undoing it, or
+for doing it by hand.
+
+## Run it by hand
 
 1. Open the AWS console, switch the region to **Europe (London)** and open **CloudShell**.
 
@@ -77,6 +89,22 @@ The bucket: four times `true`, `Enabled`, and `AES256`.
 ```bash
 B=$(terraform output -raw state_bucket); aws s3api get-public-access-block --bucket "$B"; aws s3api get-bucket-versioning --bucket "$B"; aws s3api get-bucket-encryption --bucket "$B"
 ```
+
+## Hand it to GitHub
+
+This prints what the repos need: ids and names, no passwords. Copy all of it. `run.sh` prints it too.
+
+```bash
+terraform output -json github_secrets | fold -w 100; echo
+```
+
+On your own computer, in your clone of this repo, with that in the clipboard:
+
+```bash
+pbpaste | python3 bootstrap/scripts/load_secrets.py
+```
+
+It checks every value, lists the names it will set, never shows a value, and asks before it writes.
 
 ## Run it again later
 

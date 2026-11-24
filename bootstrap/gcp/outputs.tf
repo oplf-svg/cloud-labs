@@ -15,9 +15,30 @@ output "state_bucket" {
   value       = google_storage_bucket.state.name
 }
 
-output "workload_identity_provider" {
-  description = "Provider name for every repo and tier, to store later as a GitHub Actions secret. It contains the bootstrap project's number."
-  value       = google_iam_workload_identity_pool_provider.github.name
+# The number shows up in logs, for example in Cloud Run addresses, so GitHub has to know it to hide it.
+data "google_project" "deploy" {
+  project_id = var.project_id
+}
+
+output "github_secrets" {
+  description = "Input for scripts/load_secrets.py. The provider is the same for every tier: the token's subject decides the rights."
+  sensitive   = true
+
+  value = {
+    cloud = "gcp"
+    repos = {
+      for repo in keys(local.subjects) : repo => {
+        repository = {
+          GCP_PROJECT_ID                 = var.project_id
+          GCP_PROJECT_NUMBER             = data.google_project.deploy.number
+          GCP_STATE_BUCKET               = google_storage_bucket.state.name
+          GCP_WORKLOAD_IDENTITY_PROVIDER = google_iam_workload_identity_pool_provider.github.name
+        }
+        production      = {}
+        nightly-destroy = {}
+      }
+    }
+  }
 }
 
 output "trusted_subjects" {
