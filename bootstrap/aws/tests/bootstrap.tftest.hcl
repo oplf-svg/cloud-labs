@@ -46,10 +46,11 @@ variables {
     cloud-labs         = 1469385611
   }
   suffixes = {
-    plan    = "environment:plan"
-    apply   = "environment:production"
-    destroy = "environment:nightly-destroy"
+    plan    = "environment:plan:ref:refs/heads/main"
+    apply   = "environment:production:ref:refs/heads/main"
+    destroy = "environment:nightly-destroy:ref:refs/heads/main"
   }
+  cost_subject = "repo:oplf-svg@228823995/cloud-labs@1469385611:environment:cost:ref:refs/heads/main"
 }
 
 run "trust" {
@@ -95,9 +96,9 @@ run "trust" {
   assert {
     condition = alltrue([
       for role in aws_iam_role.ci :
-      can(regex(":environment:(plan|production|nightly-destroy)$", jsondecode(role.assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"]))
+      can(regex(":environment:(plan|production|nightly-destroy):ref:refs/heads/main$", jsondecode(role.assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"]))
     ])
-    error_message = "Only jobs in one of the three environments may be trusted, so never a pull request."
+    error_message = "Only jobs in one of the three environments and on main may be trusted, so never a pull request."
   }
 }
 
@@ -193,6 +194,20 @@ run "permissions" {
     error_message = "No pipeline, and nothing that one creates, may change a flat-rate plan."
   }
 
+  # Accepting terms is a person's own decision, for models as for anything that is sold on Marketplace.
+  assert {
+    condition = alltrue([
+      for p in [aws_iam_policy.guardrails, aws_iam_policy.workload_boundary] : alltrue([
+        for a in ["aws-marketplace:AcceptAgreementRequest", "aws-marketplace:CreateAgreementRequest", "aws-marketplace:Subscribe", "bedrock:CreateFoundationModelAgreement", "bedrock:PutFoundationModelEntitlement", "bedrock:PutUseCaseForModelAccess"] :
+        anytrue([
+          for s in jsondecode(p.policy).Statement : anytrue([for d in flatten([s.Action]) : can(regex("^${replace(d, "*", ".*")}$", a))])
+          if s.Effect == "Deny" && try(s.Resource, "") == "*" && can(s.Action) && !can(s.Condition)
+        ])
+      ])
+    ])
+    error_message = "No pipeline, and nothing that one creates, may accept the terms of a model or of Marketplace."
+  }
+
   # What the look at the site needs, and the AWS policies leave out.
   assert {
     condition = alltrue([
@@ -215,6 +230,64 @@ run "permissions" {
       s.Condition.StringEquals["iam:PermissionsBoundary"] == "arn:aws:iam::111122223333:policy/github-actions/workload-boundary" if s.Sid == "GrantOnlyUnderBoundary"
     ])
     error_message = "Workload roles must be created under the boundary."
+  }
+}
+
+run "cost" {
+  command = apply
+
+  assert {
+    condition = jsondecode(aws_iam_role.cost.assume_role_policy) == {
+      Version = "2012-10-17"
+      Statement = [{
+        Effect    = "Allow"
+        Principal = { Federated = "arn:aws:iam::111122223333:oidc-provider/token.actions.githubusercontent.com" }
+        Action    = "sts:AssumeRoleWithWebIdentity"
+        Condition = { StringEquals = {
+          "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+          "token.actions.githubusercontent.com:sub" = var.cost_subject
+          "token.actions.githubusercontent.com:ref" = "refs/heads/main"
+        } }
+      }]
+    }
+    error_message = "The cost role must trust one literal subject, of cloud-labs, in an environment of its own, on main."
+  }
+
+  assert {
+    condition     = aws_iam_role.cost.name == "gha-cloud-labs-cost" && aws_iam_role.cost.path == "/github-actions/" && aws_iam_role.cost.max_session_duration == 3600
+    error_message = "The cost role must lie where the other roles are protected, and end after an hour."
+  }
+
+  assert {
+    condition = jsondecode(aws_iam_role_policy.cost.policy) == {
+      Version = "2012-10-17"
+      Statement = [
+        { Sid = "ReadCosts", Effect = "Allow", Action = ["ce:GetCostAndUsage"], Resource = "*" },
+        { Sid = "NothingElse", Effect = "Deny", NotAction = ["ce:GetCostAndUsage"], Resource = "*" },
+      ]
+    }
+    error_message = "The cost role may ask for costs, and everything else is denied."
+  }
+
+  assert {
+    condition = (
+      aws_iam_role_policy.cost.role == "gha-cloud-labs-cost"
+      && !contains([for a in aws_iam_role_policy_attachment.ci : a.role], "gha-cloud-labs-cost")
+      && !contains([for p in aws_iam_role_policy.state : p.role], "gha-cloud-labs-cost")
+      && !contains(keys(aws_iam_role.ci), "cloud-labs/cost")
+    )
+    error_message = "The cost role must be no tier: no managed policy and no right to any state."
+  }
+
+  # The list that every tier's rights are made from must not know it.
+  assert {
+    condition     = length(local.identities) == 15 && toset([for id in local.identities : id.tier]) == toset(["plan", "apply", "destroy"])
+    error_message = "subjects.json has three tiers. The cost identity stands in cost.json."
+  }
+
+  assert {
+    condition     = jsondecode(file("../cost.json")) == { cloud-labs = { cost = var.cost_subject } } && contains(output.trusted_subjects, var.cost_subject) && length(output.trusted_subjects) == 16
+    error_message = "cost.json holds one subject, and the account trusts that one and the 15."
   }
 }
 
@@ -277,7 +350,7 @@ run "github_secrets" {
     condition = output.github_secrets == {
       cloud = "aws"
       repos = {
-        for repo, id in var.repo_ids : repo => {
+        for repo, id in var.repo_ids : repo => merge({
           repository = {
             AWS_ACCOUNT_ID            = "111122223333"
             AWS_ROLE_ARN              = aws_iam_role.ci["${repo}/plan"].arn
@@ -286,15 +359,15 @@ run "github_secrets" {
           }
           production      = { AWS_ROLE_ARN = aws_iam_role.ci["${repo}/apply"].arn }
           nightly-destroy = { AWS_ROLE_ARN = aws_iam_role.ci["${repo}/destroy"].arn }
-        }
+        }, { for name in ["cost"] : name => { AWS_ROLE_ARN = aws_iam_role.cost.arn } if repo == "cloud-labs" })
       }
     }
-    error_message = "Each environment must get its own tier's role, and other jobs the plan role."
+    error_message = "Each environment must get its own role, other jobs the plan role, and only cloud-labs the cost role."
   }
 
   assert {
-    condition     = length(distinct([for role in aws_iam_role.ci : role.arn])) == 15
-    error_message = "The comparison above needs 15 different roles."
+    condition     = length(distinct(concat([for role in aws_iam_role.ci : role.arn], [aws_iam_role.cost.arn]))) == 16
+    error_message = "The comparison above needs 16 different roles."
   }
 }
 

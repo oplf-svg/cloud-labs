@@ -21,13 +21,13 @@ data "google_project" "deploy" {
 }
 
 output "github_secrets" {
-  description = "Input for scripts/load_secrets.py. The provider is the same for every tier: the token's subject decides the rights."
+  description = "Input for scripts/load_secrets.py. The provider is the same for every identity: the token's subject decides the rights."
   sensitive   = true
 
   value = {
     cloud = "gcp"
     repos = {
-      for repo in keys(local.subjects) : repo => {
+      for repo in keys(local.subjects) : repo => merge({
         repository = {
           GCP_PROJECT_ID                 = var.project_id
           GCP_PROJECT_NUMBER             = data.google_project.deploy.number
@@ -36,12 +36,12 @@ output "github_secrets" {
         }
         production      = {}
         nightly-destroy = {}
-      }
+      }, { for name, secrets in local.cost_secrets : name => secrets if repo == "cloud-labs" })
     }
   }
 }
 
 output "trusted_subjects" {
   description = "Every subject the pool trusts."
-  value       = sort([for id in local.identities : id.subject])
+  value       = sort(concat([for id in local.identities : id.subject], [local.cost_subject]))
 }

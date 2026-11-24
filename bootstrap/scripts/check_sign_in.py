@@ -35,7 +35,7 @@ NAME = "check-sign-in"
 CODE = "[A-Za-z][A-Za-z0-9._]{1,63}"
 
 AWS_REGION = "eu-west-2"
-AWS_DENIED = {"AccessDenied", "UnauthorizedOperation"}
+AWS_DENIED = {"AccessDenied", "AccessDeniedException", "UnauthorizedOperation"}
 # What AWS says to someone with the right: only a dry run, or nothing to replace.
 AWS_ALLOWED = {"DryRunOperation", "NoSuchKey", "PreconditionFailed"}
 
@@ -49,7 +49,7 @@ AZURE_TEMPLATE = {
 }
 
 GCP_REGION = "europe-west2"
-GCP_DENIED = {"IAM_PERMISSION_DENIED", "PERMISSION_DENIED", "forbidden"}
+GCP_DENIED = {"IAM_PERMISSION_DENIED", "PERMISSION_DENIED", "accessDenied", "forbidden"}
 # What Google says to someone with the right to write, because there is nothing to replace.
 GCP_ALLOWED = {"conditionNotMet"}
 # The identity must have this one, so an answer without it is no answer.
@@ -90,9 +90,9 @@ def subject_of(token):
     return json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))["sub"]
 
 
-def aws(arguments, env, run):
+def aws(arguments, env, run, region=AWS_REGION):
     """Runs one AWS command. Returns what it printed, and allowed, denied or an error code."""
-    command = ["aws", *arguments, "--region", AWS_REGION, "--output", "json"]
+    command = ["aws", *arguments, "--region", region, "--output", "json"]
     done = run(
         command, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=60
     )

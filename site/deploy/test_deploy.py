@@ -1,6 +1,7 @@
 """Runs deploy.py against stand-ins for GitHub, Terraform, AWS, Azure and the public site. Nothing real is called."""
 
 import contextlib
+import copy
 import datetime
 import email.message
 import hashlib
@@ -23,6 +24,7 @@ import deploy
 
 sys.path.insert(0, str(deploy.SCRIPTS))
 from test_check_sign_in import jwt
+from test_github_checks import GOOD
 
 ACCOUNT, BUCKET = "111122223333", "tfstate-0a1b2c3d"
 CLIENT_ID, SUBSCRIPTION, TENANT, STORAGE, LOOKING_ID = (f"{digit * 8}-{digit * 4}-{digit * 4}-{digit * 4}-{digit * 12}" for digit in "12345")
@@ -35,6 +37,8 @@ AZURE_STATE = f"{BACKEND['container_name']}/{BACKEND['key']}"
 ROLES = {tier: f"arn:aws:iam::{ACCOUNT}:role/github-actions/gha-cloud-labs-{tier}" for tier in ("plan", "apply")}
 CLIENTS = {"plan": LOOKING_ID, "apply": CLIENT_ID}
 TOKENS = {tier: jwt(deploy.SUBJECTS["cloud-labs"][tier]) for tier in ROLES}
+# The rules as they should be. What GitHub says about the night run and the commits has a question mark in it.
+RULES = {path: answer for path, answer in GOOD.items() if "?" not in path}
 GITHUB = "github-token-of-the-job"
 HIDDEN = [ACCOUNT, BUCKET, *ROLES.values(), *CLIENTS.values(), SUBSCRIPTION, TENANT, STORAGE, SECRET, SESSION, BEARER, STORE_BEARER, *TOKENS.values(), ASKING, GITHUB]
 
@@ -103,6 +107,7 @@ class World:
         self.plan = {"format_version": "1.2", "complete": True, "errored": False, "resource_changes": NEW[cloud] if plan is None else plan}
         self.ran, self.sent, self.asked, self.environments, self.slept = [], [], [], [], 0
         self.there, self.plans, self.registered, self.night = {}, [], "Registered", "success"
+        self.rules = copy.deepcopy(RULES)
         self.site, self.extra, self.visits, self.newest = dict(FILES), {}, 0, "c0ffee"
 
     # What is started on the machine.
@@ -227,9 +232,11 @@ class World:
             return 301, headers(SAFE | {"Location": parts.path + "/"}), b""
         return 404, headers(SAFE | {"Content-Type": "text/html"}), self.site["404.html"]
 
-    # What GitHub says about the night run.
+    # What GitHub says about the night run, and about the rules.
     def fetch(self, path):
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        if path in self.rules:
+            return self.rules[path]
         if "/runs?" in path:
             return {"workflow_runs": [{"created_at": now, "status": "completed", "conclusion": self.night}]}
         if "/commits?path=site" in path:
@@ -589,6 +596,26 @@ class Deploy(unittest.TestCase):
                 code, output = self.go("look", world)
                 self.assertEqual((code, self.changed(world), world.asked), (1, [], []))
                 self.assertIn("The state names something that is not part of the site.", output)
+
+    def test_waits_until_the_rules_on_github_are_there(self):
+        base = "/repos/oplf-svg/cloud-labs"
+        changes = {
+            "environment production must have a required reviewer": lambda rules: rules[f"{base}/environments"]["environments"][0].update(protection_rules=[{"type": "branch_policy"}]),
+            "environment plan allows more or less than the main branch": lambda rules: rules[f"{base}/environments/plan/deployment-branch-policies"]["branch_policies"].append({"name": "*", "type": "branch"}),
+            "GitHub's subject does not end with the branch": lambda rules: rules[f"{base}/actions/oidc/customization/sub"].update(use_default=True),
+            "main does not need the check ci from everyone": lambda rules: rules[f"{base}/branches/main"].update(protected=False),
+            "repo is not public": lambda rules: rules[base].update(private=True),
+        }
+        for cloud in ("aws", "azure"):
+            mark = self.looked(cloud)
+            for problem, change_rules in changes.items():
+                with self.subTest(cloud=cloud, problem=problem):
+                    world = World(cloud)
+                    change_rules(world.rules)
+                    code, output = self.go("apply", world, mark)
+                    # Before there is a token of any kind.
+                    self.assertEqual((code, world.ran, world.sent), (1, [], []))
+                    self.assertIn(f"Not deployed, because of the rules on GitHub: {problem}.", output)
 
     def test_waits_until_the_night_run_works(self):
         for cloud in ("aws", "azure"):

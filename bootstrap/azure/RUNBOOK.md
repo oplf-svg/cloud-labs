@@ -4,7 +4,7 @@ Run once, as Owner of the subscription, in Cloud Shell. Nothing here needs a key
 
 | You run | It creates | Cost |
 |---|---|---|
-| `terraform apply`, once | 15 managed identities with one federated credential each, 4 custom roles, 41 role assignments | Free |
+| `terraform apply`, once | 16 managed identities with one federated credential each, 5 custom roles, 42 role assignments | Free |
 | | 1 resource group for the bootstrap, locked against deletion, and 1 empty one per repo | Free |
 | | 1 storage account for state, 6 containers: encrypted, versioned, no public access, no keys | Under 0.05 USD a month |
 
@@ -53,7 +53,7 @@ for doing it by hand.
    export PATH=/tmp/tf-bin:$PATH TF_DATA_DIR=/tmp/tf-azure TF_VAR_subscription_id=$(az account show --query id --output tsv)
    ```
 
-6. Plan. It must end with `Plan: 91 to add, 0 to change, 0 to destroy.` If Terraform cannot get a token, run `az login`
+6. Plan. It must end with `Plan: 95 to add, 0 to change, 0 to destroy.` If Terraform cannot get a token, run `az login`
    and try again.
 
    ```bash
@@ -75,7 +75,7 @@ for doing it by hand.
    minute and repeat from `terraform plan -out=tfplan` in step 6. What exists already is not created twice, so the
    number is smaller.
 
-8. Check that the state is in the account, then remove the local copy. The count must be 92.
+8. Check that the state is in the account, then remove the local copy. The count must be 96.
 
    ```bash
    terraform state list | wc -l
@@ -89,10 +89,10 @@ for doing it by hand.
 
 ## Check it
 
-Every subject Azure trusts, against the list in this repo:
+Every subject Azure trusts, against the two lists in this repo:
 
 ```bash
-diff <(jq -r '.[][]' ../subjects.json | sort) <(for i in $(az identity list -g rg-github-bootstrap --query '[].name' -o tsv); do az identity federated-credential list -g rg-github-bootstrap --identity-name "$i" --query '[].subject' -o tsv; done | sort) && echo "15 subjects match"
+diff <(jq -r '.[][]' ../subjects.json ../cost.json | sort) <(for i in $(az identity list -g rg-github-bootstrap --query '[].name' -o tsv); do az identity federated-credential list -g rg-github-bootstrap --identity-name "$i" --query '[].subject' -o tsv; done | sort) && echo "16 subjects match"
 ```
 
 The storage account: `public` and `keys` are `false`, `tls` is `TLS1_2`, and `versioning` is `true`.
@@ -116,6 +116,11 @@ pbpaste | python3 bootstrap/scripts/load_secrets.py
 ```
 
 It checks every value, lists the names it will set, never shows a value, and asks before it writes.
+
+## Costs
+
+The identity that reads costs needs nothing else on a pay-as-you-go subscription. If the subscription belongs to a
+billing profile (Microsoft Customer Agreement), "Azure charges" has to be on **Yes** in that profile's policies.
 
 ## Run it again later
 

@@ -129,9 +129,15 @@ locals {
   purchase_actions = [
     "artifact:AcceptAgreement",
     "athena:CreateCapacityReservation",
+    # The terms of models and of what is sold on Marketplace are for a person to accept.
     "aws-marketplace:AcceptAgreement*",
+    "aws-marketplace:CreateAgreementRequest",
+    "aws-marketplace:Subscribe",
     "bedrock-mantle:CreateReservation",
+    "bedrock:CreateFoundationModelAgreement",
     "bedrock:CreateProvisionedModelThroughput",
+    "bedrock:PutFoundationModelEntitlement",
+    "bedrock:PutUseCaseForModelAccess",
     "cloudfront:CreateSavingsPlan",
     "devicefarm:PurchaseOffering",
     "devicefarm:RenewOffering",
@@ -198,7 +204,7 @@ locals {
   ]
 }
 
-# Attached to all 15 roles. Contains only denies.
+# Attached to the 15 roles of the three tiers. Contains only denies.
 resource "aws_iam_policy" "guardrails" {
   name        = "guardrails"
   path        = local.ci_path

@@ -14,8 +14,8 @@ import time
 import unittest
 
 BOOTSTRAP = pathlib.Path(__file__).resolve().parent.parent
-EXPECTED = {"aws": 104, "azure": 91, "gcp": 45}
-SUBJECTS = [s for tiers in json.loads((BOOTSTRAP / "subjects.json").read_text()).values() for s in tiers.values()]
+EXPECTED = {"aws": 106, "azure": 95, "gcp": 50}
+SUBJECTS = [s for file in ("subjects.json", "cost.json") for some in json.loads((BOOTSTRAP / file).read_text()).values() for s in some.values()]
 
 TERRAFORM = r"""#!/usr/bin/env python3
 import json, os, pathlib, sys
@@ -207,7 +207,7 @@ class Run(unittest.TestCase):
             self.assertEqual((self.box / "remote").read_text(), str(EXPECTED[cloud]))
             for leftover in ("terraform.tfstate", "terraform.tfstate.backup", "tfplan"):
                 self.assertFalse((self.stack / leftover).exists(), leftover)
-            self.assertIn("15 subjects match", self.out)
+            self.assertIn("16 subjects match", self.out)
             self.assertIn('{"cloud": "' + cloud, self.out)
             self.assertNotRegex(self.log(), r"terraform (destroy|apply -auto)")
             for line in self.log().splitlines():
@@ -297,7 +297,7 @@ class Run(unittest.TestCase):
             self.assertEqual(self.go(cloud, bucket="tfstate-0a1b2c3d", answer="yes" if cloud == "gcp" else "no"), 0, self.out)
             self.assertFalse(self.applied())
             self.assertIn("tfstate-0a1b2c3d", (self.stack / "backend.tf").read_text())
-            self.assertIn("15 subjects match", self.out)
+            self.assertIn("16 subjects match", self.out)
 
     def test_run_again_for_a_new_output(self):
         for cloud in self.each_cloud():
@@ -307,17 +307,17 @@ class Run(unittest.TestCase):
 
     def test_carries_out_a_later_change(self):
         # As when plan came to trust another subject: everything is there already, and some of it changes in place.
-        before = [subject.replace(":environment:plan", ":pull_request") for subject in SUBJECTS]
-        self.assertEqual(len(set(before) - set(SUBJECTS)), 5)
+        before = [subject.removesuffix(":ref:refs/heads/main") for subject in SUBJECTS if ":environment:cost" not in subject]
+        self.assertEqual(len(set(before) - set(SUBJECTS)), 15)
         for cloud in self.each_cloud():
             (self.box / "remote").write_text(str(EXPECTED[cloud]))
-            later = {"bucket": "tfstate-0a1b2c3d", "subjects_before": before, "update": 5}
+            later = {"bucket": "tfstate-0a1b2c3d", "subjects_before": before, "update": 15}
             self.assertEqual(self.go(cloud, answer="no", **later), 1)
             self.assertFalse(self.applied())
             self.assertEqual(self.go(cloud, **later), 0, self.out)
-            self.assertIn("This will create 0 and change 5 resources, and delete none, in:", self.out)
+            self.assertIn("This will create 0 and change 15 resources, and delete none, in:", self.out)
             self.assertTrue(self.applied())
-            self.assertIn("15 subjects match", self.out)
+            self.assertIn("16 subjects match", self.out)
             self.assertEqual((self.box / "remote").read_text(), str(EXPECTED[cloud]))
 
     def test_a_replacement_stops_a_later_change(self):
@@ -328,14 +328,29 @@ class Run(unittest.TestCase):
             self.assertFalse(self.applied())
 
     def test_a_subject_that_is_no_longer_in_the_list_is_not_accepted(self):
-        # What a pull request's job has. Nothing may trust it, not even next to the right ones.
-        old = SUBJECTS[0].partition(":environment:")[0] + ":pull_request"
+        # What a pull request's job has, and what a job in an environment had before the branch was part of it. Nothing may
+        # trust it, not even next to the right ones.
+        for old in (SUBJECTS[0].partition(":environment:")[0] + ":pull_request", SUBJECTS[0].removesuffix(":ref:refs/heads/main")):
+            for cloud in self.each_cloud():
+                (self.box / "remote").write_text(str(EXPECTED[cloud]))
+                for wrong in ({"extra_subjects": [old]}, {"subjects": [old, *SUBJECTS[1:]]}, {"subjects": SUBJECTS[1:]}):
+                    self.assertEqual(self.go(cloud, bucket="tfstate-0a1b2c3d", **wrong), 1)
+                    self.assertIn("differs from subjects.json and cost.json", self.out)
+                    self.assertNotIn("pbpaste", self.out)
+
+    def test_the_cost_identity_is_trusted_too(self):
+        cost = next(subject for subject in SUBJECTS if ":environment:cost" in subject)
         for cloud in self.each_cloud():
             (self.box / "remote").write_text(str(EXPECTED[cloud]))
-            for wrong in ({"extra_subjects": [old]}, {"subjects": [old, *SUBJECTS[1:]]}, {"subjects": SUBJECTS[1:]}):
-                self.assertEqual(self.go(cloud, bucket="tfstate-0a1b2c3d", **wrong), 1)
-                self.assertIn("differs from subjects.json", self.out)
-                self.assertNotIn("pbpaste", self.out)
+            self.assertEqual(self.go(cloud, bucket="tfstate-0a1b2c3d", subjects=[subject for subject in SUBJECTS if subject != cost]), 1)
+            self.assertIn(f"< {cost}", self.out)
+
+    def test_google_gets_the_apis_that_it_needs(self):
+        self.assertEqual(self.go("gcp"), 0, self.out)
+        enabled = [line for line in self.log().splitlines() if "services enable" in line]
+        self.assertEqual(len(enabled), 2)
+        for name, project in (("bigquery", "example-bootstrap-1"), ("cloudasset", "example-project-1")):
+            self.assertEqual([line.endswith(f"--project {project}") for line in enabled if f"{name}.googleapis.com" in line], [True])
 
     def test_bucket_without_state(self):
         for cloud in self.each_cloud():
@@ -387,7 +402,7 @@ class Run(unittest.TestCase):
             self.assertEqual(self.there(cloud, **later), 0, self.out)
             self.assertIn("This will create 0 and change 5 resources, and delete none, in:", self.out)
             self.assertTrue(self.applied())
-            self.assertIn("15 subjects match", self.out)
+            self.assertIn("16 subjects match", self.out)
             # GitHub has the ids already, so they are not on the screen.
             self.assertIn("Nothing new", self.out)
             self.assertNotIn('{"cloud": "', self.out)

@@ -30,7 +30,7 @@ SITE = pathlib.Path(__file__).resolve().parents[1]
 SCRIPTS = SITE.parent / "bootstrap" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 from check_sign_in import CLOUDS, OWNER, SUBJECTS, Unusable, answer, github_token, subject_of
-from github_checks import check_schedules, get
+from github_checks import check_environments, check_schedules, get
 
 REPO = "cloud-labs"
 
@@ -609,6 +609,10 @@ def main(argv=None, env=os.environ, run=subprocess.run, send=answer, ask=visit, 
             problems = check_schedules(REPO, fetch, datetime.datetime.now(datetime.timezone.utc))
             if problems:
                 raise Stop(f"Not deployed, because of the night run: {'; '.join(problems)}.")
+            # Whether a person has approved this, no cloud can see. A rule that is gone is noticed here, before there is a token.
+            problems = check_environments(REPO, fetch)
+            if problems:
+                raise Stop(f"Not deployed, because of the rules on GitHub: {'; '.join(problems)}.")
             newest, this = (fetch(f"/repos/{OWNER}/{REPO}/commits?path=site&sha={at}&per_page=1") or [{}] for at in ("main", env["GITHUB_SHA"]))
             if not newest[0].get("sha") or newest[0]["sha"] != this[0].get("sha"):
                 raise Stop("There is a newer version of the site on main. Start this workflow again from there.")

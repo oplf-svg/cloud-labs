@@ -15,7 +15,7 @@ import check_sign_in as checks
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 REPO, OTHER = "cloud-labs", "webhook-platform"
-SUBJECT = "repo:oplf-svg@228823995/cloud-labs@1469385611:environment:plan"
+SUBJECT = "repo:oplf-svg@228823995/cloud-labs@1469385611:environment:plan:ref:refs/heads/main"
 
 ACCOUNT, BUCKET = "111122223333", "tfstate-0a1b2c3d"
 ROLES = f"arn:aws:iam::{ACCOUNT}:role/github-actions"
@@ -598,10 +598,13 @@ class Preparation(Base):
     def test_another_subject(self):
         for sent, shown in (
             # What a pull request's job has, and a job on main without an environment.
-            (SUBJECT.replace("environment:plan", "pull_request"), SUBJECT.replace("environment:plan", "pull_request")),
-            (SUBJECT.replace("environment:plan", "ref:refs/heads/main"), SUBJECT.replace("environment:plan", "ref:refs/heads/main")),
+            (SUBJECT.replace("environment:plan:ref:refs/heads/main", "pull_request"), SUBJECT.replace("environment:plan:ref:refs/heads/main", "pull_request")),
+            (SUBJECT.replace("environment:plan:", ""), SUBJECT.replace("environment:plan:", "")),
+            # The right environment, but not on main, and what GitHub writes if the repo's subject template is lost.
+            (SUBJECT.replace("refs/heads/main", "refs/pull/9/merge"), SUBJECT.replace("refs/heads/main", "refs/pull/9/merge")),
+            (SUBJECT.removesuffix(":ref:refs/heads/main"), SUBJECT.removesuffix(":ref:refs/heads/main")),
             (checks.SUBJECTS[REPO]["apply"], checks.SUBJECTS[REPO]["apply"]),
-            ("repo:oplf-svg/cloud-labs:environment:plan", "repo:oplf-svg/cloud-labs:environment:plan"),
+            ("repo:oplf-svg/cloud-labs:environment:plan:ref:refs/heads/main", "repo:oplf-svg/cloud-labs:environment:plan:ref:refs/heads/main"),
             ("repo:x:ref:refs/heads/a b\n::add", "repo:x:ref:refs/heads/a?b?::add"),
         ):
             message = f"GitHub's subject is {shown}, not the one in subjects.json."

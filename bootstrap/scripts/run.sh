@@ -18,9 +18,9 @@ set -euo pipefail
 
 cloud=${1:-}
 case "$cloud" in
-  aws) expected=104 ;;
-  azure) expected=91 ;;
-  gcp) expected=45 ;;
+  aws) expected=106 ;;
+  azure) expected=95 ;;
+  gcp) expected=50 ;;
   *)
     echo "usage: run.sh aws | azure | gcp" >&2
     exit 2
@@ -248,8 +248,8 @@ gcp_setup() {
   where="Google Cloud projects $TF_VAR_project_id and $TF_VAR_bootstrap_project_id"
 
   confirm "This turns on the Google APIs the bootstrap needs, and takes the Editor role away from the default service account of $TF_VAR_project_id." || stop "Nothing was changed."
-  gcloud services enable cloudresourcemanager.googleapis.com iam.googleapis.com storage.googleapis.com sts.googleapis.com --project "$TF_VAR_bootstrap_project_id"
-  gcloud services enable cloudresourcemanager.googleapis.com compute.googleapis.com iam.googleapis.com serviceusage.googleapis.com --project "$TF_VAR_project_id"
+  gcloud services enable bigquery.googleapis.com cloudresourcemanager.googleapis.com iam.googleapis.com storage.googleapis.com sts.googleapis.com --project "$TF_VAR_bootstrap_project_id"
+  gcloud services enable cloudasset.googleapis.com cloudresourcemanager.googleapis.com compute.googleapis.com iam.googleapis.com serviceusage.googleapis.com --project "$TF_VAR_project_id"
   number=$(gcloud projects describe "$TF_VAR_project_id" --format='value(projectNumber)')
   account="$number-compute@developer.gserviceaccount.com"
   # Compute Engine creates it, and its Editor role, a moment after being turned on.
@@ -424,11 +424,11 @@ esac
 "${cloud}_last"
 
 step "Check: every subject this cloud trusts"
-if diff <(jq -r '.[][]' ../subjects.json | sort) <("${cloud}_subjects" | sort); then
-  echo "ok   15 subjects match"
+if diff <(jq -r '.[][]' ../subjects.json ../cost.json | sort) <("${cloud}_subjects" | sort); then
+  echo "ok   16 subjects match"
   note "every subject matches"
 else
-  stop "The list above differs from subjects.json (< expected, > found). Everything was created, but look into this before you use it."
+  stop "The list above differs from subjects.json and cost.json (< expected, > found). Everything was created, but look into this before you use it."
 fi
 
 ending=ok

@@ -17,11 +17,19 @@ import subprocess
 import sys
 
 OWNER = "oplf-svg"
-REPOS = list(json.loads((pathlib.Path(__file__).resolve().parent.parent / "subjects.json").read_text()))
+BOOTSTRAP = pathlib.Path(__file__).resolve().parent.parent
+REPOS = list(json.loads((BOOTSTRAP / "subjects.json").read_text()))
+COST = json.loads((BOOTSTRAP / "cost.json").read_text())
 
 # Where a secret goes, and whose identity a job gets there. The environment plan has no secrets of its own,
 # so its jobs get those of the repo.
 TIERS = {"repository": "plan", "production": "apply", "nightly-destroy": "destroy"}
+
+
+def scopes_of(repo):
+    """Every place in this repo. One repo has an environment for its identity that reads costs."""
+    return TIERS | {name: name for name in COST.get(repo, {})}
+
 
 GUID = "[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}"
 
@@ -40,6 +48,7 @@ NAMES = {
         "AZURE_TENANT_ID": GUID,
     },
     "gcp": {
+        "GCP_COST_PROJECT_ID": "[a-z][a-z0-9-]{4,28}[a-z0-9]",
         "GCP_PROJECT_ID": "[a-z][a-z0-9-]{4,28}[a-z0-9]",
         "GCP_PROJECT_NUMBER": "[0-9]{6,20}",
         "GCP_STATE_BUCKET": "tfstate-[0-9a-f]{8}",
@@ -49,6 +58,9 @@ NAMES = {
 
 # The one that differs per tier, so each environment has its own.
 PER_TIER = {"aws": "AWS_ROLE_ARN", "azure": "AZURE_CLIENT_ID", "gcp": None}
+
+# On Google Cloud the subject alone decides who it is. What the cost identity needs there is the place of the costs.
+PLACE_OF_COSTS = "GCP_COST_PROJECT_ID"
 
 
 class Unusable(Exception):
@@ -69,7 +81,9 @@ def read_input(text):
 
 def names_in(cloud, scope):
     if scope == "repository":
-        return set(NAMES[cloud])
+        return set(NAMES[cloud]) - {PLACE_OF_COSTS}
+    if scope not in TIERS and cloud == "gcp":
+        return {PLACE_OF_COSTS}
     return {PER_TIER[cloud]} - {None}
 
 
@@ -84,9 +98,9 @@ def check(data):
     found = []
     for repo in REPOS:
         scopes = repos[repo]
-        if not isinstance(scopes, dict) or set(scopes) != set(TIERS):
-            raise Unusable(f"{repo} does not list exactly {', '.join(TIERS)}.")
-        for scope, tier in TIERS.items():
+        if not isinstance(scopes, dict) or set(scopes) != set(scopes_of(repo)):
+            raise Unusable(f"{repo} does not list exactly {', '.join(scopes_of(repo))}.")
+        for scope, tier in scopes_of(repo).items():
             values = scopes[scope]
             if not isinstance(values, dict) or set(values) != names_in(cloud, scope):
                 raise Unusable(f"{repo}, {scope}: the names are not the expected ones.")
@@ -98,13 +112,15 @@ def check(data):
 
     for name in NAMES[cloud]:
         distinct = {value for _, _, n, value in found if n == name}
-        wanted = len(REPOS) * len(TIERS) if name == PER_TIER[cloud] else 1
+        wanted = sum(len(scopes_of(repo)) for repo in REPOS) if name == PER_TIER[cloud] else 1
         if len(distinct) != wanted:
             raise Unusable(f"{name} should have {wanted} different value(s) and has {len(distinct)}.")
 
     accounts = {value for _, _, name, value in found if name == "AWS_ACCOUNT_ID"}
     if any(value.startswith("arn:") and value.split(":")[4] not in accounts for _, _, _, value in found):
         raise Unusable("The role names belong to another AWS account.")
+    if len({value for _, _, name, value in found if name in ("GCP_PROJECT_ID", PLACE_OF_COSTS)}) == 1:
+        raise Unusable("The costs lie in the project that the repos deploy into.")
     return cloud, found
 
 
@@ -144,6 +160,9 @@ def main(argv=None, stdin=sys.stdin, run=gh, ask=confirm):
         names = sorted(names_in(cloud, scope))
         if names:
             print(f"  {scope:16} {tier:8} {', '.join(names)}")
+    for repo, others in COST.items():
+        for scope in others:
+            print(f"  {scope:16} {scope:8} {', '.join(sorted(names_in(cloud, scope)))} (only in {repo})")
     if args.check:
         print("Checked only. Nothing was written.")
         return 0
@@ -160,7 +179,7 @@ def main(argv=None, stdin=sys.stdin, run=gh, ask=confirm):
         missing = 0
         for repo in REPOS:
             counts = []
-            for scope in TIERS:
+            for scope in scopes_of(repo):
                 listed = set(run("secret", "list", *place(repo, scope), "--json", "name", "--jq", ".[].name").split())
                 missing += len(names_in(cloud, scope) - listed)
                 counts.append(f"{scope} {len(names_in(cloud, scope) & listed)}")

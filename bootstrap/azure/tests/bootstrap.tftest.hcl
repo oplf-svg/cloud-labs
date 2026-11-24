@@ -24,6 +24,20 @@ mock_provider "azurerm" {
   }
 }
 
+# The cost identity and its role have ids of their own, so that the tests can tell them apart from the others.
+override_resource {
+  target = azurerm_user_assigned_identity.cost
+  values = {
+    id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-github-bootstrap/providers/Microsoft.ManagedIdentity/userAssignedIdentities/cost"
+    principal_id = "00000000-0000-0000-0000-00000000000e"
+  }
+}
+
+override_resource {
+  target = azurerm_role_definition.cost
+  values = { role_definition_resource_id = "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.Authorization/roleDefinitions/00000000-0000-0000-0000-00000000000f" }
+}
+
 mock_provider "random" {
   mock_resource "random_id" {
     defaults = { hex = "0a1b2c3d" }
@@ -42,10 +56,11 @@ variables {
     cloud-labs         = 1469385611
   }
   suffixes = {
-    plan    = "environment:plan"
-    apply   = "environment:production"
-    destroy = "environment:nightly-destroy"
+    plan    = "environment:plan:ref:refs/heads/main"
+    apply   = "environment:production:ref:refs/heads/main"
+    destroy = "environment:nightly-destroy:ref:refs/heads/main"
   }
+  cost_subject = "repo:oplf-svg@228823995/cloud-labs@1469385611:environment:cost:ref:refs/heads/main"
 }
 
 run "trust" {
@@ -72,8 +87,8 @@ run "trust" {
   }
 
   assert {
-    condition     = alltrue([for c in azurerm_federated_identity_credential.ci : can(regex(":environment:(plan|production|nightly-destroy)$", c.subject))])
-    error_message = "Only jobs in one of the three environments may be trusted, so never a pull request."
+    condition     = alltrue([for c in azurerm_federated_identity_credential.ci : can(regex(":environment:(plan|production|nightly-destroy):ref:refs/heads/main$", c.subject))])
+    error_message = "Only jobs in one of the three environments and on main may be trusted, so never a pull request."
   }
 
   assert {
@@ -121,7 +136,7 @@ run "permissions" {
 
   assert {
     condition = alltrue([
-      for r in [azurerm_role_definition.plan, azurerm_role_definition.apply, azurerm_role_definition.destroy, azurerm_role_definition.register] : alltrue([
+      for r in [azurerm_role_definition.plan, azurerm_role_definition.apply, azurerm_role_definition.destroy, azurerm_role_definition.register, azurerm_role_definition.cost] : alltrue([
         for a in concat(r.permissions[0].actions, r.permissions[0].not_actions) : length(regexall("[*]", a)) <= 1
       ])
     ])
@@ -172,6 +187,55 @@ run "permissions" {
   }
 }
 
+run "cost" {
+  command = apply
+
+  assert {
+    condition = (
+      azurerm_federated_identity_credential.cost.subject == var.cost_subject
+      && azurerm_federated_identity_credential.cost.issuer == "https://token.actions.githubusercontent.com"
+      && azurerm_federated_identity_credential.cost.audience == tolist(["api://AzureADTokenExchange"])
+      && azurerm_federated_identity_credential.cost.user_assigned_identity_id == azurerm_user_assigned_identity.cost.id
+    )
+    error_message = "The cost identity must trust one literal subject, of cloud-labs, in an environment of its own, on main."
+  }
+
+  assert {
+    condition     = azurerm_user_assigned_identity.cost.name == "id-gha-cloud-labs-cost" && azurerm_user_assigned_identity.cost.resource_group_name == "rg-github-bootstrap"
+    error_message = "The cost identity must lie where no pipeline has any rights."
+  }
+
+  assert {
+    condition = (
+      toset(azurerm_role_definition.cost.permissions[0].actions) == toset(["Microsoft.CostManagement/query/action", "Microsoft.CostManagement/query/read"])
+      && length(azurerm_role_definition.cost.permissions) == 1
+      && try(length(azurerm_role_definition.cost.permissions[0].data_actions), 0) == 0
+    )
+    error_message = "The cost role may ask what something has cost, and nothing else."
+  }
+
+  # The identity is in one assignment, with that role.
+  assert {
+    condition = (
+      azurerm_role_assignment.cost.scope == "/subscriptions/00000000-0000-0000-0000-000000000000"
+      && azurerm_role_assignment.cost.role_definition_id == azurerm_role_definition.cost.role_definition_resource_id
+      && azurerm_role_assignment.cost.principal_id == azurerm_user_assigned_identity.cost.principal_id
+      && length([
+        for a in concat(values(azurerm_role_assignment.plan), values(azurerm_role_assignment.apply), values(azurerm_role_assignment.apply_grants), values(azurerm_role_assignment.apply_register), values(azurerm_role_assignment.destroy), values(azurerm_role_assignment.state)) :
+        a if a.principal_id == azurerm_user_assigned_identity.cost.principal_id || a.role_definition_id == azurerm_role_definition.cost.role_definition_resource_id
+      ]) == 0
+      && !contains(keys(azurerm_user_assigned_identity.ci), "cloud-labs/cost")
+    )
+    error_message = "The cost identity must have its own role and no other, and no right to any state."
+  }
+
+  # Nothing else may hold the cost role or stand in its place.
+  assert {
+    condition     = jsondecode(file("../cost.json")) == { cloud-labs = { cost = var.cost_subject } } && contains(output.trusted_subjects, var.cost_subject) && length(output.trusted_subjects) == 16
+    error_message = "cost.json holds one subject, and the subscription trusts that one and the 15."
+  }
+}
+
 run "state" {
   command = apply
 
@@ -219,7 +283,7 @@ run "github_secrets" {
     condition = output.github_secrets == {
       cloud = "azure"
       repos = {
-        for repo, id in var.repo_ids : repo => {
+        for repo, id in var.repo_ids : repo => merge({
           repository = {
             AZURE_CLIENT_ID       = azurerm_user_assigned_identity.ci["${repo}/plan"].client_id
             AZURE_STATE_ACCOUNT   = "tfstate0a1b2c3d"
@@ -228,15 +292,15 @@ run "github_secrets" {
           }
           production      = { AZURE_CLIENT_ID = azurerm_user_assigned_identity.ci["${repo}/apply"].client_id }
           nightly-destroy = { AZURE_CLIENT_ID = azurerm_user_assigned_identity.ci["${repo}/destroy"].client_id }
-        }
+        }, { for name in ["cost"] : name => { AZURE_CLIENT_ID = azurerm_user_assigned_identity.cost.client_id } if repo == "cloud-labs" })
       }
     }
-    error_message = "Each environment must get its own tier's identity, and other jobs the plan identity."
+    error_message = "Each environment must get its own identity, other jobs the plan identity, and only cloud-labs the cost identity."
   }
 
   assert {
-    condition     = length(distinct([for identity in azurerm_user_assigned_identity.ci : identity.client_id])) == 15
-    error_message = "The comparison above needs 15 different identities."
+    condition     = length(distinct(concat([for identity in azurerm_user_assigned_identity.ci : identity.client_id], [azurerm_user_assigned_identity.cost.client_id]))) == 16
+    error_message = "The comparison above needs 16 different identities."
   }
 }
 

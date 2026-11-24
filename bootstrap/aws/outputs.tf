@@ -19,13 +19,13 @@ output "state_bucket" {
 }
 
 output "github_secrets" {
-  description = "Input for scripts/load_secrets.py. A job in production or nightly-destroy gets that environment's value, any other job gets the plan role, which only a job in plan can use."
+  description = "Input for scripts/load_secrets.py. A job in production, nightly-destroy or cost gets that environment's value, any other job gets the plan role, which only a job in plan can use."
   sensitive   = true
 
   value = {
     cloud = "aws"
     repos = {
-      for repo in keys(local.subjects) : repo => {
+      for repo in keys(local.subjects) : repo => merge({
         repository = {
           AWS_ACCOUNT_ID            = var.account_id
           AWS_ROLE_ARN              = aws_iam_role.ci["${repo}/plan"].arn
@@ -38,12 +38,12 @@ output "github_secrets" {
         nightly-destroy = {
           AWS_ROLE_ARN = aws_iam_role.ci["${repo}/destroy"].arn
         }
-      }
+      }, { for name, secrets in local.cost_secrets : name => secrets if repo == "cloud-labs" })
     }
   }
 }
 
 output "trusted_subjects" {
   description = "Every subject this account trusts."
-  value       = sort([for id in local.identities : id.subject])
+  value       = sort(concat([for id in local.identities : id.subject], [local.cost_subject]))
 }

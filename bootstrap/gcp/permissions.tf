@@ -1,6 +1,6 @@
 locals {
   # Everything in this file is granted on project_id. No pipeline has a project role where the
-  # trust and the state are.
+  # trust, the state and the costs are.
 
   # Deploy rights, service by service. Left out on purpose: the basic roles, roles that can buy
   # commitments (Compute Admin, BigQuery Admin, Vertex AI Admin), roles that can run Cloud Build
@@ -212,6 +212,24 @@ resource "google_project_iam_custom_role" "project_grants" {
   title       = "GitHub Actions project grants"
   description = "Changes project access. Granted only under a condition that limits the roles."
   permissions = setintersection(local.project_grant_permissions, local.offered)
+}
+
+# A second opinion for the night run of cloud-labs: searches for what no list of a service shows. Google offers this one or
+# refuses the role, so it does not go through local.offered: there it would vanish without a word.
+resource "google_project_iam_custom_role" "census" {
+  project     = var.project_id
+  role_id     = "ghaCensus"
+  title       = "GitHub Actions census"
+  description = "Searches everything in the project. Only for the night run of cloud-labs."
+  permissions = ["cloudasset.assets.searchAllResources"]
+}
+
+resource "google_project_iam_member" "census" {
+  project = var.project_id
+  role    = google_project_iam_custom_role.census.id
+  member  = local.principal["cloud-labs/destroy"]
+
+  depends_on = [google_iam_workload_identity_pool_provider.github]
 }
 
 resource "google_project_iam_member" "read" {
