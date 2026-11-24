@@ -70,9 +70,14 @@ aws_setup() {
 }
 
 aws_fresh() {
-  if aws iam list-open-id-connect-providers --output text | grep -q token.actions.githubusercontent.com; then
+  local providers
+  providers=$(aws iam list-open-id-connect-providers --output text) ||
+    stop "This account may not work with identity providers, so it cannot trust GitHub. Nothing was changed. See \"Which account\" in the runbook."
+  if grep -q token.actions.githubusercontent.com <<< "$providers"; then
     stop "This account already trusts GitHub, but there is no state bucket. See step 5 of the runbook."
   fi
+  aws ec2 describe-availability-zones --region eu-west-2 > /dev/null ||
+    stop "This account may not use London (eu-west-2). Nothing was changed. See \"Which account\" in the runbook."
 }
 
 aws_has_state() {

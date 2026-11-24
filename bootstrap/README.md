@@ -81,6 +81,8 @@ python3 scripts/github_checks.py environments
 This reads GitHub's public API and must print `ok` five times. Every runbook starts with it. GitHub allows 60 anonymous
 requests an hour per address and the check uses 20, so if a Cloud Shell is refused, run it on your own computer.
 
+On AWS, not every kind of account can run this: see [Which account](aws/RUNBOOK.md#which-account).
+
 ## Secrets in GitHub
 
 [load_secrets.py](scripts/load_secrets.py) stores what each bootstrap printed, as Actions secrets in every repo. They

@@ -58,6 +58,8 @@ def say(text=""): print(text)
 if tool == "aws":
     if "get-caller-identity" in line: say("111122223333" if "Account" in line else "arn:aws:iam::111122223333:user/admin")
     elif "list-buckets" in line: say(bucket or "None")
+    elif "list-open-id" in line and conf.get("no_providers"): sys.exit("AccessDenied")
+    elif "describe-availability-zones --region eu-west-2" in line: sys.exit("UnauthorizedOperation" if conf.get("no_london") else 0)
     elif "list-open-id" in line: say("OPENIDCONNECTPROVIDERLIST\tarn:aws:iam::111122223333:oidc-provider/token.actions.githubusercontent.com" if conf.get("in_the_way") else "")
     elif "head-object" in line: sys.exit(0 if has_state else 1)
     elif "list-roles" in line: say(json.dumps({"Roles": [{"AssumeRolePolicyDocument": {"Statement": [{"Principal": {"Federated": "x/token.actions.githubusercontent.com"}, "Condition": {"StringEquals": {"token.actions.githubusercontent.com:sub": s}}}]}} for s in trusted]}))
@@ -236,6 +238,14 @@ class Run(unittest.TestCase):
                 self.setUp()
                 self.assertEqual(self.go(cloud, in_the_way=True), 1)
                 self.assertFalse(self.applied())
+
+    def test_aws_account_that_cannot_be_used(self):
+        for block, reason in (("no_providers", "identity providers"), ("no_london", "London")):
+            with self.subTest(block):
+                self.setUp()
+                self.assertEqual(self.go("aws", **{block: True}), 1)
+                self.assertIn(reason, self.out)
+                self.assertNotIn("terraform", self.log())
 
     def test_an_extra_subject_is_not_accepted(self):
         for cloud in self.each_cloud():

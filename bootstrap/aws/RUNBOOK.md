@@ -7,6 +7,20 @@ Run once, as an administrator, in CloudShell. Nothing here needs a key, and GitH
 | `terraform apply`, once | 1 OIDC provider, 15 roles, 5 policies and their attachments | Free |
 | | 1 S3 bucket for state: encrypted, versioned, public access blocked | Under 0.05 USD a month |
 
+## Which account
+
+The account must be allowed to create identity providers and to use Europe (London). One made with
+[Sign up for AWS (new)](https://docs.aws.amazon.com/accounts/latest/reference/sign-up-for-aws.html) is allowed neither,
+on its Free or its Paid plan: [AWS's own policies](https://docs.aws.amazon.com/accounts/latest/reference/scps-and-rcps-for-projects.html)
+deny `iam:*Provider*` in it and keep it in the region AWS chose. CloudShell then says that London is unavailable. There
+are two ways on:
+
+- Use an account made with **Sign up for AWS (advanced)**.
+- Upgrade the account to the Paid plan and [activate advanced features](https://docs.aws.amazon.com/accounts/latest/reference/activate-advanced-features.html).
+  Neither can be undone. Then add `eu-west-2` to the statement `RegionFloor` of its service control policy.
+
+`run.sh` checks for both limits before it plans anything.
+
 ## The short way
 
 Open the AWS console, switch the region to **Europe (London)** and open **CloudShell**. This does every step below. It
@@ -44,6 +58,7 @@ for doing it by hand.
    ```
 
 5. Check that the account does not trust GitHub yet. If this prints a line, stop: the provider has to be imported first.
+   If it is denied, see [Which account](#which-account).
 
    ```bash
    aws iam list-open-id-connect-providers --output text | grep token.actions.githubusercontent.com
