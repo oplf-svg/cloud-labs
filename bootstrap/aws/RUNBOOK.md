@@ -17,7 +17,12 @@ are two ways on:
 
 - Use an account made with **Sign up for AWS (advanced)**.
 - Upgrade the account to the Paid plan and [activate advanced features](https://docs.aws.amazon.com/accounts/latest/reference/activate-advanced-features.html).
-  Neither can be undone. Then add `eu-west-2` to the statement `RegionFloor` of its service control policy.
+  Neither can be undone, and activating removes any spend limit. Then:
+  1. In the management account, open **AWS Organizations**, **Policies**, **Service control policies** and add
+     `eu-west-2` to the regions in the statement `RegionFloor` of `AdvancedModeRegionRestrictionSecurityControlPolicy`.
+  2. In the project's account, open the console's **Unified Settings**, **Account settings** and add London to
+     **Visible Regions**. Until then the console says that access to the region has been restricted.
+  3. Run the rest of this page in the project's account. Keep the management account for administration.
 
 `run.sh` checks for both limits before it plans anything.
 
