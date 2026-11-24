@@ -1,0 +1,72 @@
+name: sign-in
+
+# Signs in to each cloud as a pull request does, and checks where the plan identity's rights end. Only a
+# pull request can: that identity trusts no other subject, so there is no manual or scheduled trigger.
+# It is not a required check, so that a cloud's bad day cannot block a merge.
+on:
+  pull_request:
+    paths:
+      - bootstrap/**
+      - .github/workflows/sign-in.yml
+
+permissions: {}
+
+concurrency:
+  group: sign-in-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+# Each job names its own cloud's secrets and no others. GitHub hides a value only in jobs that use it.
+jobs:
+  aws:
+    # A pull request from a fork gets no token, and one from a fork or from Dependabot gets no secrets.
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+      AWS_STATE_BUCKET: ${{ secrets.AWS_STATE_BUCKET }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: python3 bootstrap/scripts/check_sign_in.py aws
+
+  azure:
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_STATE_ACCOUNT: ${{ secrets.AZURE_STATE_ACCOUNT }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: python3 bootstrap/scripts/check_sign_in.py azure
+
+  gcp:
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+      GCP_PROJECT_NUMBER: ${{ secrets.GCP_PROJECT_NUMBER }}
+      GCP_STATE_BUCKET: ${{ secrets.GCP_STATE_BUCKET }}
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: python3 bootstrap/scripts/check_sign_in.py gcp
