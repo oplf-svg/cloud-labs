@@ -234,7 +234,7 @@ gcp_last() {
 }
 
 gcp_setup() {
-  local project number account apply policy role
+  local project number account apply policy role attempt
   TF_VAR_project_id=${TF_VAR_project_id:-$(ask "Id of the project that the repos deploy into: ")}
   TF_VAR_bootstrap_project_id=${TF_VAR_bootstrap_project_id:-$(ask "Id of the other, empty project for the trust and the state: ")}
   export TF_VAR_project_id TF_VAR_bootstrap_project_id
@@ -268,8 +268,12 @@ gcp_setup() {
   policy=$(gcloud projects get-iam-policy "$TF_VAR_project_id" --format=json)
   for role in roles/cloudkms.admin roles/monitoring.editor roles/serviceusage.serviceUsageAdmin; do
     if jq -e --arg role "$role" --arg member "$apply" 'any(.bindings[]; .role == $role and (has("condition") | not) and any(.members[]; . == $member))' <<< "$policy" > /dev/null; then
-      gcloud projects remove-iam-policy-binding "$TF_VAR_project_id" --condition=None --role="$role" --member="$apply" > /dev/null ||
-        stop "Google did not take $role away from apply. Run the same command again."
+      # Google itself writes into the same policy while services are turned on.
+      for attempt in 1 2 3 4; do
+        [ "$attempt" != 4 ] || stop "Google did not take $role away from apply. Run the same command again."
+        if gcloud projects remove-iam-policy-binding "$TF_VAR_project_id" --condition=None --role="$role" --member="$apply" > /dev/null; then break; fi
+        sleep "${RUN_WAIT:-10}"
+      done
     fi
   done
   gcp_last

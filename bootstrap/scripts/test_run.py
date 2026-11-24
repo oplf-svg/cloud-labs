@@ -84,7 +84,9 @@ elif tool == "gcloud":
     elif "services enable" in line or "service-accounts describe" in line: pass
     elif "projects describe" in line: say("123456789012" if "example-bootstrap-1" in line else "210987654321")
     elif "remove-iam-policy-binding" in line and "principalSet" in line:
-        if conf.get("keeps_roles"): sys.exit("PERMISSION_DENIED")
+        tried = len((box / "tries").read_text().split()) if (box / "tries").exists() else 0
+        print("tried", file=open(box / "tries", "a"))
+        if tried < conf.get("keeps_roles", 0): sys.exit("PERMISSION_DENIED")
         with open(box / "lost", "a") as lost: print(args[args.index("--condition=None") + 1].removeprefix("--role="), file=lost)
     elif "get-iam-policy" in line and "--format=json" in line:
         lost = (box / "lost").read_text().split() if (box / "lost").exists() else []
@@ -402,7 +404,11 @@ class Run(unittest.TestCase):
 
     def test_google_keeps_the_roles(self):
         tiers = "principalSet://iam.googleapis.com/projects/123456789012/locations/global/workloadIdentityPools/github-actions/attribute.tier"
-        self.assertEqual(self.go("gcp", bindings=[{"role": "roles/monitoring.editor", "members": [f"{tiers}/apply"]}], keeps_roles=True), 1)
+        held = [{"role": "roles/monitoring.editor", "members": [f"{tiers}/apply"]}]
+        # It may be busy for a moment.
+        self.assertEqual(self.go("gcp", bindings=held, keeps_roles=2), 0, self.out)
+        self.setUp()
+        self.assertEqual(self.go("gcp", bindings=held, keeps_roles=3), 1)
         self.assertIn("STOPPED: Google did not take roles/monitoring.editor away from apply. Run the same command again.", self.out)
         self.assertIn("PERMISSION_DENIED", self.out)
         self.assertNotIn("terraform plan", self.log())
