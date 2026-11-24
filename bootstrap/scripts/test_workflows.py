@@ -91,5 +91,27 @@ class Workflows(unittest.TestCase):
             self.assertNotIn("toJSON(secrets)", self.texts[file])
 
 
+    def test_what_reads_the_private_terms_was_approved(self):
+        """A pull request could otherwise change the check, and print the terms into a public log."""
+        for file, name, job, _ in self.each_job():
+            held = re.findall(r"secrets(?:\.|\[)[^}]*", "\n".join(job.values()))
+            if (file, name) != ("ci.yml", "blocked-terms"):
+                self.assertNotRegex("\n".join(job.values()), r"(?i)BLOCKED_TERMS|PRIVATE_TERMS")
+                if file == "ci.yml":
+                    self.assertEqual(held, [])
+                continue
+            self.assertEqual([one.strip() for one in held], ["secrets.PRIVATE_TERMS"])
+            steps = re.split(r"(?m)^- ", job["steps"])[1:]
+            approved, aside, pull, title, look = steps
+            self.assertRegex(approved, r"\Auses: actions/checkout@[0-9a-f]{40} # v[0-9.]+\n  with:\n    ref: [0-9a-f]{40}\n    persist-credentials: false\s*\Z")
+            self.assertEqual(aside.strip(), 'run: cp .github/scripts/blocked_terms.py "$RUNNER_TEMP/blocked_terms.py"')
+            self.assertRegex(pull, r"\Auses: actions/checkout@[0-9a-f]{40} # v[0-9.]+\n  with:\n    fetch-depth: 0\n    persist-credentials: false\s*\Z")
+            self.assertEqual(re.findall(r"run: (.*)", title), ['gh api "repos/$GITHUB_REPOSITORY/pulls/$NUMBER" > "$RUNNER_TEMP/pull.json"'])
+            self.assertEqual(re.findall(r"run: (.*)", look), ['python3 -I "$RUNNER_TEMP/blocked_terms.py"'])
+            self.assertNotIn("env", job)
+        for file in self.texts:
+            self.assertEqual(self.texts[file].count("secrets.PRIVATE_TERMS"), int(file == "ci.yml"), file)
+
+
 if __name__ == "__main__":
     unittest.main()
