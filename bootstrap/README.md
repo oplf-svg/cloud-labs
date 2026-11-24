@@ -155,6 +155,25 @@ python3 scripts/github_checks.py schedules
   delete permission: S3 bucket settings, Azure subnet associations, Google Cloud IAM members, node pools and router NAT.
   If that is not enough, pass `destroy_extra` and run the bootstrap again.
 
+## The agents' identity
+
+Coding agents do not use a person's GitHub sign-in. They work as a GitHub App, through
+[as_agent.py](scripts/as_agent.py), which gets a token for one repo and one hour at most, gives it to one command, and
+prints neither the token nor the App's key.
+
+| The App may | It may not |
+|---|---|
+| Push branches and open pull requests | Change workflow files, settings, rules, environments or secrets |
+| Read checks and runs | Approve a deployment |
+| Merge what a person has approved | Approve its own pull request |
+
+`main` needs one approval from someone other than whoever pushed last, and a new push cancels earlier approvals. So a
+change to a workflow file has to be pushed by a person, and everything an agent proposes has to be approved by one.
+Suspending the App stops every agent at once.
+
+This holds only where agents run without a person's sign-in: no `gh` login, no GitHub credential in another program, and
+no signed-in browser that an agent can drive.
+
 ## Known limits
 
 - An approved `apply` is trusted with the workloads. Within the limits above it could also leave access behind for
