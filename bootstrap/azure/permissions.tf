@@ -90,6 +90,23 @@ locals {
     "Microsoft.MarketplaceOrdering/*",
   ]
 
+  # What a pipeline may register, and so use at all. Some providers sell models by the token, and nobody can know all of
+  # them, so this is a list of what is needed.
+  registrable = [
+    "Microsoft.AlertsManagement",
+    "Microsoft.App",
+    "Microsoft.Compute",
+    "Microsoft.ContainerService",
+    "Microsoft.DBforPostgreSQL",
+    "Microsoft.EventHub",
+    "Microsoft.Insights",
+    "Microsoft.ManagedIdentity",
+    "Microsoft.Network",
+    "Microsoft.OperationalInsights",
+    "Microsoft.Storage",
+    "Microsoft.Web",
+  ]
+
   # The only roles a pipeline may grant or revoke, and only for service principals. None of
   # them can assign roles. The pipelines' own roles are not listed, so they cannot be removed.
   grantable_roles = {
@@ -194,8 +211,7 @@ resource "azurerm_role_definition" "destroy" {
   }
 }
 
-# Registering a resource provider is free and happens at subscription level, outside any group. Not those of models and of
-# Marketplace.
+# Registering a resource provider is free and happens at subscription level, outside any group.
 resource "azurerm_role_definition" "register" {
   name              = "GitHub Actions provider registration"
   description       = "Registers resource providers. No preview features."
@@ -203,8 +219,8 @@ resource "azurerm_role_definition" "register" {
   assignable_scopes = [local.subscription]
 
   permissions {
-    actions     = ["*/register/action", "Microsoft.Resources/subscriptions/providers/read"]
-    not_actions = ["Microsoft.CognitiveServices/*", "Microsoft.Features/*", "Microsoft.MachineLearningServices/*", "Microsoft.Marketplace/*", "Microsoft.MarketplaceOrdering/*"]
+    actions     = concat([for provider in local.registrable : "${provider}/register/action"], ["Microsoft.Resources/subscriptions/providers/read"])
+    not_actions = ["Microsoft.Features/*"]
   }
 }
 

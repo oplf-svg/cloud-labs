@@ -218,24 +218,30 @@ run "models" {
     error_message = "Apply must not set up a model, read its keys or accept terms."
   }
 
+  # Written out again here on purpose. What is not registered cannot be used, and some providers sell models too.
+  assert {
+    condition = toset(azurerm_role_definition.register.permissions[0].actions) == toset(concat(
+      [for name in ["AlertsManagement", "App", "Compute", "ContainerService", "DBforPostgreSQL", "EventHub", "Insights", "ManagedIdentity", "Network", "OperationalInsights", "Storage", "Web"] : "Microsoft.${name}/register/action"],
+      ["Microsoft.Resources/subscriptions/providers/read"],
+    ))
+    error_message = "Apply may register twelve providers and no other."
+  }
+
+  # No other role lets a pipeline register something: the one for its own group cannot, and neither can those that it may give.
   assert {
     condition = alltrue([
-      for a in ["Microsoft.CognitiveServices/register/action", "Microsoft.MachineLearningServices/register/action", "Microsoft.Marketplace/register/action", "Microsoft.MarketplaceOrdering/register/action"] :
-      anytrue([for n in azurerm_role_definition.register.permissions[0].not_actions : can(regex("^${replace(replace(n, ".", "[.]"), "*", ".*")}$", a))])
+      for r in [azurerm_role_definition.plan, azurerm_role_definition.destroy, azurerm_role_definition.cost, azurerm_role_definition.census] :
+      !anytrue([for a in r.permissions[0].actions : can(regex("register|/action$|^[*]$", a)) && a != "Microsoft.CostManagement/query/action"])
     ])
-    error_message = "Apply must not register the providers of models and of Marketplace."
+    error_message = "Only apply may register a provider."
   }
 
   # And nothing else goes with that.
   assert {
-    condition = alltrue(flatten([
-      for r, actions in {
-        apply    = ["Microsoft.App/containerApps/write", "Microsoft.ContainerRegistry/registries/write", "Microsoft.ContainerService/managedClusters/write", "Microsoft.DBforPostgreSQL/flexibleServers/write", "Microsoft.EventHub/namespaces/write", "Microsoft.ManagedIdentity/userAssignedIdentities/write", "Microsoft.Web/staticSites/write"]
-        register = ["Microsoft.App/register/action", "Microsoft.ContainerService/register/action", "Microsoft.DBforPostgreSQL/register/action", "Microsoft.EventHub/register/action"]
-        } : [
-        for a in actions : !anytrue([for n in { apply = azurerm_role_definition.apply, register = azurerm_role_definition.register }[r].permissions[0].not_actions : can(regex("^${replace(replace(n, ".", "[.]"), "*", ".*")}$", a))])
-      ]
-    ]))
+    condition = alltrue([
+      for a in ["Microsoft.App/containerApps/write", "Microsoft.ContainerRegistry/registries/write", "Microsoft.ContainerService/managedClusters/write", "Microsoft.DBforPostgreSQL/flexibleServers/write", "Microsoft.EventHub/namespaces/write", "Microsoft.ManagedIdentity/userAssignedIdentities/write", "Microsoft.Web/staticSites/write"] :
+      !anytrue([for n in azurerm_role_definition.apply.permissions[0].not_actions : can(regex("^${replace(replace(n, ".", "[.]"), "*", ".*")}$", a))])
+    ])
     error_message = "Apply must still be able to set up containers, databases, clusters and sites."
   }
 }

@@ -92,7 +92,8 @@ sign-in keys or passwords for an identity, buy commitments, accept the terms of 
 Azure, change a flat-rate plan of CloudFront or read billing data.
 
 Models are paid by the call. On AWS no tier can call one, and a workload only those in [models.json](models.json). On Azure
-one can only be called where somebody has set it up, and no tier can do that. Google Cloud has no such limit yet.
+one can only be called where somebody has set it up, no tier can do that, and `apply` may register only the twelve providers
+that are needed. Google Cloud has no such limit yet.
 
 So that its night run has a second opinion about what is left, `destroy` of `cloud-labs` may also see which resource
 groups there are on Azure, and search the whole project on Google Cloud. No other identity may.
