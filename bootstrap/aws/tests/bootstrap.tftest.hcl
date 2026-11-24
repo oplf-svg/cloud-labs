@@ -217,10 +217,10 @@ run "permissions" {
     error_message = "Plan must be able to look at a site on CloudFront."
   }
 
-  # What Terraform reads of Cloud Map, also while it deletes there.
+  # What Terraform reads of Cloud Map, also while it deletes there, and what a night asks to see that nothing is left.
   assert {
     condition = alltrue([
-      for a in ["GetNamespace", "GetOperation", "GetService", "ListInstances", "ListTagsForResource"] :
+      for a in ["GetNamespace", "GetOperation", "GetService", "ListInstances", "ListNamespaces", "ListServices", "ListTagsForResource"] :
       contains(flatten([for s in jsondecode(aws_iam_policy.read_extras.policy).Statement : s.Action if s.Effect == "Allow"]), "servicediscovery:${a}")
     ])
     error_message = "Plan and destroy must be able to read the way from an API Gateway to containers."

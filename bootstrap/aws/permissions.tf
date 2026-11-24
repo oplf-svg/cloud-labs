@@ -322,6 +322,8 @@ resource "aws_iam_policy" "read_extras" {
           "servicediscovery:GetOperation",
           "servicediscovery:GetService",
           "servicediscovery:ListInstances",
+          "servicediscovery:ListNamespaces",
+          "servicediscovery:ListServices",
           "servicediscovery:ListTagsForResource",
           "states:ValidateStateMachineDefinition",
         ], var.plan_extra)
