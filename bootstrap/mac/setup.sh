@@ -47,7 +47,7 @@ fingerprint() {
 keep() { mv "$work/$1" "$tools/$1"; }
 
 # ---- Python, for az and gcloud -------------------------------------------------------------------
-python=python-3.14.10
+python="python-3.14.10"
 if [ ! -d "$tools/$python" ]; then
   fetch 'https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.14.10%2B20261026-aarch64-apple-darwin-install_only_stripped.tar.gz' 26753457 "$work/python.tar.gz"
   fingerprint "$work/python.tar.gz" 95eb8c87d16af37c54e9765e31d8c56c0d8ffa9968ea0f704f73a9b83f84e9f9
@@ -57,7 +57,7 @@ if [ ! -d "$tools/$python" ]; then
 fi
 
 # ---- AWS CLI. AWS publishes no fingerprint for a Mac. Apple's signature takes its place. ---------
-aws=aws-2.40.0
+aws="aws-2.40.0"
 if [ ! -d "$tools/$aws" ]; then
   fetch 'https://awscli.amazonaws.com/AWSCLIV2-2.40.0.pkg' 61141180 "$work/aws.pkg"
   signature=$(pkgutil --check-signature "$work/aws.pkg") || stop "The package of AWS is not signed. Nothing of it was used."
@@ -89,7 +89,7 @@ EOF
 fi
 
 # ---- Azure CLI: Microsoft's own archive, the one that Homebrew takes too -------------------------
-az=az-2.92.0
+az="az-2.92.0"
 if [ ! -d "$tools/$az" ]; then
   fetch 'https://github.com/Azure/azure-cli/releases/download/azure-cli-2.92.0/azure-cli-2.92.0-macos-arm64.tar.gz' 46713373 "$work/az.tar.gz"
   fingerprint "$work/az.tar.gz" 6fb7d8d6d3db65098e259d5d1d6364359b4b54b5aef4ea6b18bddddd9468407a
@@ -100,7 +100,7 @@ if [ ! -d "$tools/$az" ]; then
 fi
 
 # ---- Google Cloud CLI: the archive, without its installer, which would want an administrator -----
-gcloud=gcloud-593.0.0
+gcloud="gcloud-593.0.0"
 if [ ! -d "$tools/$gcloud" ]; then
   fetch 'https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-593.0.0-darwin-arm.tar.gz' 54790650 "$work/gcloud.tar.gz"
   # Two sources: the recipe of Homebrew has the first, Google's storage the second.
