@@ -28,7 +28,7 @@ GOOD = {
     f"{BASE}/environments/nightly-destroy/deployment-branch-policies": {"branch_policies": [{"name": "main", "type": "branch"}]},
     f"{BASE}/actions/workflows?per_page=100": {"workflows": [{"id": 7, "path": checks.DESTROY_WORKFLOW, "state": "active"}]},
     f"{BASE}/commits?sha=main&per_page=1": [{"commit": {"committer": {"date": "2026-11-28T12:00:00Z"}}}],
-    f"{BASE}/actions/workflows/7/runs?event=schedule&per_page=1": {
+    f"{BASE}/actions/workflows/7/runs?event=schedule&status=completed&per_page=1": {
         "workflow_runs": [{"created_at": "2026-12-01T03:37:00Z", "status": "completed", "conclusion": "success"}]
     },
 }
@@ -116,19 +116,19 @@ class Schedules(unittest.TestCase):
 
     def test_missed_nights(self):
         def change(data):
-            data[f"{BASE}/actions/workflows/7/runs?event=schedule&per_page=1"]["workflow_runs"][0]["created_at"] = "2026-11-29T03:37:00Z"
+            data[f"{BASE}/actions/workflows/7/runs?event=schedule&status=completed&per_page=1"]["workflow_runs"][0]["created_at"] = "2026-11-29T03:37:00Z"
 
         self.assertEqual(self.problems(change), ["last nightly destroy was 56 hours ago"])
 
     def test_failed_run(self):
         def change(data):
-            data[f"{BASE}/actions/workflows/7/runs?event=schedule&per_page=1"]["workflow_runs"][0]["conclusion"] = "failure"
+            data[f"{BASE}/actions/workflows/7/runs?event=schedule&status=completed&per_page=1"]["workflow_runs"][0]["conclusion"] = "failure"
 
         self.assertEqual(self.problems(change), ["last nightly destroy ended with failure"])
 
     def test_never_ran(self):
         self.assertEqual(
-            self.problems(lambda d: d.pop(f"{BASE}/actions/workflows/7/runs?event=schedule&per_page=1")),
+            self.problems(lambda d: d.pop(f"{BASE}/actions/workflows/7/runs?event=schedule&status=completed&per_page=1")),
             ["nightly destroy has never run on schedule"],
         )
 

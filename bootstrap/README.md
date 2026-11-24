@@ -132,6 +132,15 @@ say what counts as activity. The schedule can also be dropped on a busy night. T
 python3 scripts/github_checks.py schedules
 ```
 
+## The night run of this repo
+
+[nightly-destroy.yml](../.github/workflows/nightly-destroy.yml) runs every night as `destroy`.
+[night.py](scripts/night.py) signs in, checks that this identity cannot create anything or become `apply`, and compares
+the states it finds with [stacks.json](../stacks.json), which names every stack, the clouds it is on, and what the night
+does to it: `destroyed`, or `stays` with the reason why. A state that is not in the list means that something was
+deployed which nobody declared, and the run fails, so no other stack can be deployed until that is settled. It looks at
+the names of the states only: what was made without one, or by hand, is for the budget alerts.
+
 ## Rules for project code
 
 - **Init** with `-lockfile=readonly`, always. Terraform also installs providers that only the state names, and the

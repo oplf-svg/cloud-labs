@@ -113,7 +113,8 @@ def check_schedules(repo, fetch, now):
         if quiet >= MAX_QUIET_DAYS:
             problems.append(f"no commit on main for {quiet} days, GitHub turns the schedule off at 60")
 
-    runs = fetch(f"/repos/{OWNER}/{repo}/actions/workflows/{workflow['id']}/runs?event=schedule&per_page=1") or {}
+    # The last one that has ended: one that still waits or runs has not shown anything yet.
+    runs = fetch(f"/repos/{OWNER}/{repo}/actions/workflows/{workflow['id']}/runs?event=schedule&status=completed&per_page=1") or {}
     latest = next(iter(runs.get("workflow_runs", [])), None)
     if latest is None:
         problems.append("nightly destroy has never run on schedule")
@@ -121,7 +122,7 @@ def check_schedules(repo, fetch, now):
         hours = (now - parse_time(latest["created_at"])).total_seconds() / 3600
         if hours > MAX_HOURS_SINCE_DESTROY:
             problems.append(f"last nightly destroy was {hours:.0f} hours ago")
-        if latest["status"] == "completed" and latest["conclusion"] != "success":
+        if latest["conclusion"] != "success":
             problems.append(f"last nightly destroy ended with {latest['conclusion']}")
     return problems
 
