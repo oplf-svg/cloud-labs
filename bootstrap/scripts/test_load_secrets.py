@@ -2,7 +2,9 @@ import contextlib
 import copy
 import io
 import json
+import os
 import pathlib
+import pty
 import subprocess
 import tempfile
 import textwrap
@@ -206,6 +208,34 @@ class Load(unittest.TestCase):
             with self.subTest(name):
                 self.assertEqual(self.load(data), 1)
                 self.assertEqual(self.gh.commands, [], "nothing may be asked of gh")
+
+
+class ConfirmTest(unittest.TestCase):
+    """The prompt at a real terminal, with something else on standard input, as with pbpaste."""
+
+    def answered(self, typed):
+        child, terminal = pty.fork()
+        if child == 0:
+            code = 2
+            try:
+                os.dup2(os.open(os.devnull, os.O_RDONLY), 0)
+                code = 0 if loader.confirm("Store them now? ") else 1
+            finally:
+                os._exit(code)
+        os.write(terminal, typed.encode())
+        with contextlib.suppress(OSError):
+            while os.read(terminal, 1024):
+                pass
+        os.close(terminal)
+        return os.waitstatus_to_exitcode(os.waitpid(child, 0)[1])
+
+    def test_yes_goes_on(self):
+        self.assertEqual(self.answered("yes\n"), 0)
+
+    def test_anything_else_stops(self):
+        for typed in ("no\n", "\n", "y\n", "yes please\n"):
+            with self.subTest(typed):
+                self.assertEqual(self.answered(typed), 1)
 
 
 if __name__ == "__main__":

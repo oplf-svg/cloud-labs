@@ -117,11 +117,12 @@ def place(repo, scope):
 
 
 def confirm(question):
-    # The clipboard may be on standard input, so ask the terminal itself.
-    with open("/dev/tty", "r+", encoding="utf-8") as terminal:
-        terminal.write(question)
-        terminal.flush()
-        return terminal.readline().strip() == "yes"
+    # The clipboard may be on standard input, so ask the terminal itself. Python cannot open it for
+    # reading and writing at once: "r+" fails because a terminal cannot seek.
+    with open("/dev/tty", "w", encoding="utf-8") as screen:
+        screen.write(question)
+    with open("/dev/tty", encoding="utf-8") as keyboard:
+        return keyboard.readline().strip() == "yes"
 
 
 def main(argv=None, stdin=sys.stdin, run=gh, ask=confirm):
