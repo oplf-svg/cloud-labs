@@ -5,9 +5,9 @@
   deploy.py apply aws | azure    does that if it is still the same, and checks what visitors get
 
 Runs in GitHub Actions on main. A look runs in the plan environment, as an identity that can do nothing
-else, so nobody has to approve it. An apply runs in the production environment, after a person has approved
-it. Job logs are public, so it prints its own words, the names of public files, and errors without anything
-that could be an id or an address.
+else, so nobody has to approve it. One that the clock starts ends red if there is anything to change. An
+apply runs in the production environment, after a person has approved it. Job logs are public, so it prints
+its own words, the names of public files, and errors without anything that could be an id or an address.
 """
 
 import argparse
@@ -30,7 +30,7 @@ SITE = pathlib.Path(__file__).resolve().parents[1]
 SCRIPTS = SITE.parent / "bootstrap" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 from check_sign_in import CLOUDS, OWNER, SUBJECTS, Unusable, answer, github_token, subject_of
-from github_checks import check_schedules, get
+from github_checks import check_environments, check_schedules, get
 
 REPO = "cloud-labs"
 
@@ -164,6 +164,11 @@ def difference(files, there):
     for kind, names in kinds.items():
         # What is there now could have any name, and a log can be steered by what is printed into it.
         yield from (f"     {kind} {name if re.fullmatch(NAME, name) else '(a name that the site does not use)'}" for name in names)
+
+
+def settled(plan, files, there):
+    """Whether a deploy would do nothing, because exactly this stack and these files are live."""
+    return not any(moves(plan)) and there == {name: hashlib.md5(body, usedforsecurity=False).hexdigest() for name, body in files.items()}
 
 
 def look_like_visitors(host, files, ask):
@@ -396,7 +401,7 @@ def prepare_aws(token, env, run, work, files, lock):
     plan = terraform.plan(lock, account_id=env["AWS_ACCOUNT_ID"], addresses=sorted(addresses(files)), on_free_plan=on_plan)
     there = stored(aws, bucket) if bucket else {}
     print(*difference(files, there), sep="\n", flush=True)
-    return aws, terraform, on_plan, terraform.mark(plan, files, there, env)
+    return aws, terraform, on_plan, settled(plan, files, there), terraform.mark(plan, files, there, env)
 
 
 def stored(aws, bucket):
@@ -404,11 +409,11 @@ def stored(aws, bucket):
 
 
 def look_aws(token, env, run, send, ask, work, files):
-    return prepare_aws(token, env, run, work, files, lock=False)[-1]
+    return prepare_aws(token, env, run, work, files, lock=False)[-2:]
 
 
 def apply_aws(token, env, run, send, ask, sleep, work, files, folder, agreed):
-    aws, terraform, on_plan, mark = prepare_aws(token, env, run, work, files, lock=True)
+    aws, terraform, on_plan, _, mark = prepare_aws(token, env, run, work, files, lock=True)
     agreed(mark)
     terraform.apply()
     bucket, distribution, host = place_on_aws(terraform.known())
@@ -523,15 +528,15 @@ def prepare_azure(token, env, run, send, ask, work, files, lock):
     there = served(host, files, ask) if host else {}
     print(*difference(files, there), sep="\n")
     print(f"The settings: {SETTINGS.name}, {hashlib.sha256(SETTINGS.read_bytes()).hexdigest()}", flush=True)
-    return azure, terraform, terraform.mark(plan, files, there, env)
+    return azure, terraform, settled(plan, files, there), terraform.mark(plan, files, there, env)
 
 
 def look_azure(token, env, run, send, ask, work, files):
-    return prepare_azure(token, env, run, send, ask, work, files, lock=False)[-1]
+    return prepare_azure(token, env, run, send, ask, work, files, lock=False)[-2:]
 
 
 def apply_azure(token, env, run, send, ask, sleep, work, files, folder, agreed):
-    azure, terraform, mark = prepare_azure(token, env, run, send, ask, work, files, lock=True)
+    azure, terraform, _, mark = prepare_azure(token, env, run, send, ask, work, files, lock=True)
     agreed(mark)
     if not azure.registered():
         azure("POST", "providers/Microsoft.Web/register", "2021-04-01", what="turn on static sites")
@@ -609,6 +614,10 @@ def main(argv=None, env=os.environ, run=subprocess.run, send=answer, ask=visit, 
             problems = check_schedules(REPO, fetch, datetime.datetime.now(datetime.timezone.utc))
             if problems:
                 raise Stop(f"Not deployed, because of the night run: {'; '.join(problems)}.")
+            # Whether a person has approved this, no cloud can see. A rule that is gone is noticed here, before there is a token.
+            problems = check_environments(REPO, fetch)
+            if problems:
+                raise Stop(f"Not deployed, because of the rules on GitHub: {'; '.join(problems)}.")
             newest, this = (fetch(f"/repos/{OWNER}/{REPO}/commits?path=site&sha={at}&per_page=1") or [{}] for at in ("main", env["GITHUB_SHA"]))
             if not newest[0].get("sha") or newest[0]["sha"] != this[0].get("sha"):
                 raise Stop("There is a newer version of the site on main. Start this workflow again from there.")
@@ -623,9 +632,15 @@ def main(argv=None, env=os.environ, run=subprocess.run, send=answer, ask=visit, 
             if args.step == "apply":
                 APPLY[args.cloud](token, env, run, send, ask, sleep, work, files, folder, agreed)
             else:
-                mark = LOOK[args.cloud](token, env, run, send, ask, work, files)
-                with open(env["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-                    output.write(f"fingerprint={mark}\n")
+                nothing_to_do, mark = LOOK[args.cloud](token, env, run, send, ask, work, files)
+                if env.get("GITHUB_EVENT_NAME") == "schedule":
+                    # Nobody deploys what the clock has started, so it gives no fingerprint. It only says whether all is well.
+                    if not nothing_to_do:
+                        raise Stop("What is live is not what main says: somebody has changed it, or a deploy is still to be approved.")
+                    print("What is live is what main says.")
+                else:
+                    with open(env["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+                        output.write(f"fingerprint={mark}\n")
     except (Stop, Unusable) as problem:
         print(f"Stopped. {problem}")
         return 1

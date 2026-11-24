@@ -21,8 +21,8 @@ HIDDEN = [value for value in PRIVATE if not value.startswith("header.")] + [TOKE
 class World:
     """GitHub and the three clouds, as they should answer. `files` are the states of this repo."""
 
-    def __init__(self, files=(), token=TOKEN, **changes):
-        self.files, self.token, self.changes, self.sent = list(files), token, changes, []
+    def __init__(self, files=(), token=TOKEN, searches=True, **changes):
+        self.files, self.token, self.searches, self.changes, self.sent = list(files), token, searches, changes, []
 
     def run(self, command, env, **options):
         line = " ".join(command)
@@ -49,10 +49,13 @@ class World:
         assert headers["Authorization"] == f"Bearer {BEARER}"
         if "/validate?" in url:
             return no("AuthorizationFailed")
+        if "/resourceGroups/rg-github-bootstrap?" in url:
+            return (200, {}, b"{}") if self.searches else no("AuthorizationFailed")
         if "comp=list" in url:
             return 200, {}, ("<R>" + "".join(f"<Blob><Name>{file}</Name></Blob>" for file in self.files) + "</R>").encode()
         if "testIamPermissions" in url:
-            return 200, {}, json.dumps({"permissions": ["resourcemanager.projects.get"]}).encode()
+            has = {"resourcemanager.projects.get", night.SEARCH} if self.searches else {"resourcemanager.projects.get"}
+            return 200, {}, json.dumps({"permissions": sorted(has & set(json.loads(body)["permissions"]))}).encode()
         if "storage.googleapis.com" in url:
             assert GOOGLE_BUCKET in url
             return 200, {}, json.dumps({"items": [{"name": f"{REPO}/{file}"} for file in self.files]} if self.files else {}).encode()
@@ -76,8 +79,8 @@ class Night(unittest.TestCase):
     def test_an_empty_night(self):
         expected = {
             "aws": [f"sign in as gha-{REPO}-destroy: allowed", f"become gha-{REPO}-apply: denied", "create a network: denied"],
-            "azure": [f"sign in as id-gha-{REPO}-destroy: allowed", "prepare a deployment: denied", "sign in to the state storage: allowed"],
-            "gcp": [f"sign in as the destroy of {REPO}: allowed", "create something: denied"],
+            "azure": [f"sign in as id-gha-{REPO}-destroy: allowed", "prepare a deployment: denied", "see the other resource groups: allowed", "sign in to the state storage: allowed"],
+            "gcp": [f"sign in as the destroy of {REPO}: allowed", "create something: denied", "search the whole project: allowed"],
         }
         for cloud, lines in expected.items():
             with self.subTest(cloud):
@@ -122,16 +125,31 @@ class Night(unittest.TestCase):
             ("aws", {"create_vpc": refuse("DryRunOperation")}, "FAIL create a network: allowed, should be denied"),
             ("aws", {f"gha_{REPO}_apply".replace("-", "_"): GRANTED}, f"FAIL become gha-{REPO}-apply: allowed, should be denied"),
             ("azure", {"/validate?": (200, {}, b"{}")}, "FAIL prepare a deployment: allowed, should be denied"),
-            ("gcp", {"testIamPermissions": (200, {}, json.dumps({"permissions": ["resourcemanager.projects.get", "compute.networks.create"]}).encode())}, "FAIL create something: allowed, should be denied"),
+            ("gcp", {"testIamPermissions": (200, {}, json.dumps({"permissions": ["resourcemanager.projects.get", "compute.networks.create", night.SEARCH]}).encode())}, "FAIL create something: allowed, should be denied"),
         )
         for cloud, changes, line in cases:
             with self.subTest(line):
                 code, output = self.go(cloud, World(**changes))
                 self.assertEqual((code, [entry for entry in output if entry.startswith("FAIL")]), (1, [line]))
 
+    def test_only_this_repo_may_look_further(self):
+        for cloud, what in (("azure", "see the other resource groups"), ("gcp", "search the whole project")):
+            code, output = self.go(cloud, World(searches=False))
+            self.assertEqual((code, [line for line in output if line.startswith("FAIL")]), (1, [f"FAIL {what}: denied, should be allowed"]))
+            # In another repo, the same right is one too many.
+            other = "webhook-platform"
+            for searches, line in ((False, f"ok   {what}: denied"), (True, f"FAIL {what}: allowed, should be denied")):
+                world = World(token=jwt(night.SUBJECTS[other]["destroy"]), searches=searches)
+                code, output = self.go(cloud, world, env={"GITHUB_REPOSITORY": f"oplf-svg/{other}"})
+                self.assertIn(line, output)
+                self.assertEqual(code, int(searches))
+
     def test_no_answer_is_not_a_refusal(self):
         code, output = self.go("gcp", World(testIamPermissions=(500, {}, b"")))
         self.assertIn("FAIL create something: no answer, should be denied", output)
+        self.assertIn("FAIL search the whole project: no answer, should be allowed", output)
+        code, output = self.go("azure", World(**{"/resourceGroups/rg-github-bootstrap?": (503, {}, b"")}))
+        self.assertEqual((code, [line for line in output if line.startswith("FAIL")]), (1, ["FAIL see the other resource groups: HTTP 503, should be allowed"]))
         code, output = self.go("azure", World(**{"comp=list": no_blob("ServerBusy", 503)}))
         self.assertEqual((code, output[-1]), (1, "FAIL list its own states: ServerBusy, should be allowed"))
 

@@ -24,7 +24,9 @@ import urllib.parse
 import urllib.request
 
 OWNER = "oplf-svg"
-SUBJECTS = json.loads((pathlib.Path(__file__).resolve().parent.parent / "subjects.json").read_text())
+HERE = pathlib.Path(__file__).resolve().parent.parent
+SUBJECTS = json.loads((HERE / "subjects.json").read_text())
+MODELS = json.loads((HERE / "models.json").read_text())
 
 ALLOWED, DENIED, EMPTY = "allowed", "denied", "nothing there"
 
@@ -35,9 +37,20 @@ NAME = "check-sign-in"
 CODE = "[A-Za-z][A-Za-z0-9._]{1,63}"
 
 AWS_REGION = "eu-west-2"
-AWS_DENIED = {"AccessDenied", "UnauthorizedOperation"}
+AWS_DENIED = {"AccessDenied", "AccessDeniedException", "UnauthorizedOperation"}
 # What AWS says to someone with the right: only a dry run, or nothing to replace.
 AWS_ALLOWED = {"DryRunOperation", "NoSuchKey", "PreconditionFailed"}
+# What AWS works out from rules. Only a rule that denies counts as one, and not that none allows it.
+AWS_DECISIONS = {"allowed": ALLOWED, "explicitDeny": DENIED, "implicitDeny": "not allowed, but not denied"}
+EVERYTHING = {"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Action": "*", "Resource": "*"}]}
+CALL_MODEL = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"]
+OTHER_MODEL_WORK = ["bedrock-mantle:CreateInference", "bedrock:CallWithBearerToken", "bedrock:CreateModelInvocationJob", "bedrock:InvokeAgent"]
+# These must never be listed: another seller's model, a larger one, and the listed one through another group of regions.
+UNLISTED = [
+    "arn:aws:bedrock:{region}::foundation-model/openai.gpt-oss-20b-1:0",
+    "arn:aws:bedrock:{region}:{account}:inference-profile/eu.anthropic.claude-opus-5-5",
+    "arn:aws:bedrock:{region}:{account}:inference-profile/global.anthropic.claude-haiku-5-5",
+]
 
 AZURE_DENIED = {"AuthorizationFailed", "AuthorizationPermissionMismatch"}
 # What Azure says to someone with the right to write, because there is nothing to replace.
@@ -49,7 +62,7 @@ AZURE_TEMPLATE = {
 }
 
 GCP_REGION = "europe-west2"
-GCP_DENIED = {"IAM_PERMISSION_DENIED", "PERMISSION_DENIED", "forbidden"}
+GCP_DENIED = {"IAM_PERMISSION_DENIED", "PERMISSION_DENIED", "accessDenied", "forbidden"}
 # What Google says to someone with the right to write, because there is nothing to replace.
 GCP_ALLOWED = {"conditionNotMet"}
 # The identity must have this one, so an answer without it is no answer.
@@ -90,9 +103,9 @@ def subject_of(token):
     return json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))["sub"]
 
 
-def aws(arguments, env, run):
+def aws(arguments, env, run, region=AWS_REGION):
     """Runs one AWS command. Returns what it printed, and allowed, denied or an error code."""
-    command = ["aws", *arguments, "--region", AWS_REGION, "--output", "json"]
+    command = ["aws", *arguments, "--region", region, "--output", "json"]
     done = run(
         command, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=60
     )
@@ -161,6 +174,36 @@ def check_aws(repo, other, token, env, run, send):
     # It may only replace a version of the file that does not exist.
     never = ["--if-match", f'"{"0" * 32}"']
     yield "write its own state", DENIED, call("s3api", "put-object", "--bucket", bucket, "--key", f"{repo}/{NAME}", *never)
+
+    def rules(name):
+        which = ["--policy-arn", f"arn:aws:iam::{account}:policy/github-actions/{name}"]
+        version = json.loads(aws(["iam", "get-policy", *which], signed, run)[0] or "{}").get("Policy", {})
+        found = aws(["iam", "get-policy-version", *which, "--version-id", version.get("DefaultVersionId", "v0")], signed, run)
+        return json.loads(found[0] or "{}").get("PolicyVersion", {}).get("Document", {})
+
+    def work_out(actions, resources, policies, boundary=None):
+        # AWS reads the rules and says what would come of it. No model is called.
+        given = ["--policy-input-list", json.dumps([json.dumps(policy) for policy in policies])]
+        given += ["--permissions-boundary-policy-input-list", json.dumps([json.dumps(boundary)])] if boundary else []
+        answers = set()
+        for resource in resources:
+            command = ["iam", "simulate-custom-policy", *given, "--action-names", *actions, "--resource-arns", resource]
+            output, got = aws(command, signed, run)
+            found = [item.get("EvalDecision") for item in json.loads(output or "{}").get("EvaluationResults") or []]
+            complete = got == ALLOWED and len(found) == len(actions)
+            answers |= {AWS_DECISIONS.get(one, "no answer") for one in found} if complete else {"no answer" if got == ALLOWED else got}
+        return answers.pop() if len(answers) == 1 else "not always the same"
+
+    boundary, own = rules("workload-boundary"), [EVERYTHING, rules("guardrails")]
+    for name, model in MODELS.items():
+        arns = [f"arn:aws:bedrock:{region.replace('*', 'central-1')}::foundation-model/{model['aws']['model']}" for region in model["aws"]["regions"]]
+        if model["aws"]["profile"]:
+            arns.append(f"arn:aws:bedrock:{AWS_REGION}:{account}:inference-profile/{model['aws']['profile']}")
+        yield f"call {name} as a workload", ALLOWED, work_out(CALL_MODEL, arns, [EVERYTHING], boundary)
+    unlisted = [arn.format(region=AWS_REGION, account=account) for arn in UNLISTED]
+    yield "call another model as a workload", DENIED, work_out(CALL_MODEL, unlisted, [EVERYTHING], boundary)
+    yield "use models in another way as a workload", DENIED, work_out(OTHER_MODEL_WORK, ["*"], [EVERYTHING], boundary)
+    yield "use a model as a pipeline", DENIED, work_out(CALL_MODEL + OTHER_MODEL_WORK, ["*"], own)
 
 
 def azure(status, headers, body):

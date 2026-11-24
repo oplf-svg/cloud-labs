@@ -2,6 +2,7 @@ import contextlib
 import copy
 import datetime
 import io
+import json
 import unittest
 import unittest.mock
 
@@ -22,21 +23,25 @@ def environment(name, reviewer):
     }
 
 
+PREFIX = "repo:oplf-svg@228823995/cloud-labs@1469385611"
+NAMES = ("production", "nightly-destroy", "plan", "cost")
+TEMPLATE = f"{BASE}/actions/oidc/customization/sub"
+
 GOOD = {
-    BASE: {"id": 1469385611, "owner": {"id": 228823995}},
-    f"{BASE}/environments": {"environments": [environment("production", True), environment("nightly-destroy", False), environment("plan", False)]},
-    f"{BASE}/environments/production/deployment-branch-policies": {"branch_policies": [{"name": "main", "type": "branch"}]},
-    f"{BASE}/environments/nightly-destroy/deployment-branch-policies": {"branch_policies": [{"name": "main", "type": "branch"}]},
-    f"{BASE}/environments/plan/deployment-branch-policies": {"branch_policies": [{"name": "main", "type": "branch"}]},
+    BASE: {"id": 1469385611, "owner": {"id": 228823995}, "private": False},
+    TEMPLATE: {"use_default": False, "include_claim_keys": ["repo", "context", "ref"], "use_immutable_subject": True, "sub_claim_prefix": PREFIX},
+    f"{BASE}/branches/main": {
+        "protected": True,
+        "protection": {"enabled": True, "required_status_checks": {"enforcement_level": "everyone", "contexts": ["ci"], "checks": [{"context": "ci", "app_id": 15368}]}},
+    },
+    f"{BASE}/environments": {"environments": [environment(name, name == "production") for name in NAMES]},
+    **{f"{BASE}/environments/{name}/deployment-branch-policies": {"branch_policies": [{"name": "main", "type": "branch"}]} for name in NAMES},
     f"{BASE}/actions/workflows?per_page=100": {"workflows": [{"id": 7, "path": checks.DESTROY_WORKFLOW, "state": "active"}]},
     f"{BASE}/commits?sha=main&per_page=1": [{"commit": {"committer": {"date": "2026-11-28T12:00:00Z"}}}],
     f"{BASE}/actions/workflows/7/runs?event=schedule&status=completed&per_page=1": {
         "workflow_runs": [{"created_at": "2026-12-01T03:37:00Z", "status": "completed", "conclusion": "success"}]
     },
 }
-
-
-NAMES = ("production", "nightly-destroy", "plan")
 
 
 class Environments(unittest.TestCase):
@@ -58,8 +63,18 @@ class Environments(unittest.TestCase):
         self.assertEqual(self.problems(), [])
 
     def test_the_environments_are_those_that_the_subjects_name(self):
+        branch = ":ref:refs/heads/main"
         for tiers in checks.SUBJECTS.values():
-            self.assertEqual({tier: subject.partition(":environment:")[2] for tier, subject in tiers.items()}, {"plan": "plan", "apply": "production", "destroy": "nightly-destroy"})
+            self.assertEqual({tier: subject.partition(":environment:")[2] for tier, subject in tiers.items()}, {"plan": f"plan{branch}", "apply": f"production{branch}", "destroy": f"nightly-destroy{branch}"})
+        self.assertEqual(checks.COST, {REPO: {"cost": f"{PREFIX}:environment:cost{branch}"}})
+
+    def test_another_repo_needs_no_environment_for_costs(self):
+        repo, subjects = "webhook-platform", checks.SUBJECTS
+        data = json.loads(json.dumps(GOOD).replace("cloud-labs", repo).replace("1469385611", "1469384538"))
+        data[f"/repos/oplf-svg/{repo}/environments"]["environments"].pop()
+        del data[f"/repos/oplf-svg/{repo}/environments/cost/deployment-branch-policies"]
+        self.assertIn(repo, subjects)
+        self.assertEqual(checks.check_environments(repo, data.get), [])
 
     def test_missing_environment(self):
         for name, problems in self.each(lambda environment: environment.update(name="another")):
@@ -103,18 +118,73 @@ class Environments(unittest.TestCase):
 
     def test_a_subject_that_no_environment_guards(self):
         for tier in ("plan", "apply", "destroy"):
-            for ending in ("pull_request", "ref:refs/heads/main", "environment:another"):
+            right = f"environment:{checks.ENVIRONMENTS[tier][0]}"
+            for ending in ("pull_request", "ref:refs/heads/main", "environment:another:ref:refs/heads/main", right, f"{right}:ref:refs/heads/another"):
                 with self.subTest(tier=tier, ending=ending):
                     subjects = copy.deepcopy(checks.SUBJECTS)
                     subjects[REPO][tier] = f"repo:oplf-svg@228823995/cloud-labs@1469385611:{ending}"
                     with unittest.mock.patch.object(checks, "SUBJECTS", subjects):
                         self.assertEqual(self.problems(), ["subjects.json does not match the repo's ids"])
 
+    def test_a_cost_subject_that_no_environment_guards(self):
+        for ending in ("pull_request", "environment:cost", "environment:plan:ref:refs/heads/main", "environment:cost:ref:refs/heads/another"):
+            with self.subTest(ending), unittest.mock.patch.object(checks, "COST", {REPO: {"cost": f"{PREFIX}:{ending}"}}):
+                self.assertEqual(self.problems(), ["cost.json does not match the repo's ids"])
+
     def test_recreated_repo_has_a_new_id(self):
         self.assertEqual(
-            self.problems(lambda d: d[BASE].update(id=1)),
-            ["subjects.json does not match the repo's ids"],
+            self.problems(lambda d: (d[BASE].update(id=1), d[TEMPLATE].update(sub_claim_prefix=PREFIX.replace("1469385611", "1")))),
+            ["subjects.json does not match the repo's ids", "cost.json does not match the repo's ids"],
         )
+
+    def test_a_repo_that_is_not_public(self):
+        # GitHub ignores the rules of its environments then.
+        for change in (lambda d: d[BASE].update(private=True), lambda d: d[BASE].pop("private")):
+            self.assertEqual(self.problems(change), ["repo is not public"])
+
+    def test_the_subject_has_to_end_with_the_branch(self):
+        changes = (
+            # As it was before, and what is left if someone takes the setting away.
+            lambda t: t.update(use_default=True),
+            lambda t: t.pop("use_default"),
+            lambda t: t.update(include_claim_keys=["repo", "context"]),
+            lambda t: t.update(include_claim_keys=["repo", "ref", "context"]),
+            lambda t: t.update(include_claim_keys=["repo", "context", "ref", "actor"]),
+            lambda t: t.update(include_claim_keys=["context", "ref"]),
+            lambda t: t.pop("include_claim_keys"),
+        )
+        for number, change in enumerate(changes):
+            with self.subTest(number):
+                self.assertEqual(self.problems(lambda d: change(d[TEMPLATE])), ["GitHub's subject does not end with the branch"])
+        self.assertEqual(self.problems(lambda d: d.pop(TEMPLATE)), ["GitHub's subject does not end with the branch"])
+
+    def test_the_subject_has_to_hold_the_ids(self):
+        for change in (lambda t: t.update(use_immutable_subject=False), lambda t: t.update(sub_claim_prefix="repo:oplf-svg/cloud-labs")):
+            self.assertEqual(self.problems(lambda d: change(d[TEMPLATE])), ["GitHub's subject does not hold the repo's ids"])
+        # GitHub's documentation calls both of them optional.
+        self.assertEqual(self.problems(lambda d: (d[TEMPLATE].pop("use_immutable_subject"), d[TEMPLATE].pop("sub_claim_prefix"))), [])
+
+    def test_main_has_to_be_protected(self):
+        path = f"{BASE}/branches/main"
+        required = lambda d: d[path]["protection"]["required_status_checks"]
+        changes = (
+            lambda d: d[path].update(protected=False),
+            lambda d: d[path].pop("protection"),
+            lambda d: d[path]["protection"].pop("required_status_checks"),
+            # Not for administrators.
+            lambda d: required(d).update(enforcement_level="non_admins"),
+            lambda d: required(d).update(checks=[]),
+            lambda d: required(d).update(checks=[{"context": "another", "app_id": 15368}]),
+            # From anyone who may report a check, and not only from GitHub Actions.
+            lambda d: required(d).update(checks=[{"context": "ci", "app_id": None}]),
+            lambda d: d.pop(path),
+        )
+        for number, change in enumerate(changes):
+            with self.subTest(number):
+                self.assertEqual(self.problems(change), ["main does not need the check ci from everyone"])
+        # More than that is fine.
+        self.assertEqual(self.problems(lambda d: required(d)["checks"].append({"context": "more", "app_id": 1})), [])
+        self.assertEqual(self.problems(lambda d: required(d)["checks"][0].update(another="word")), [])
 
 
 class Schedules(unittest.TestCase):
@@ -176,7 +246,7 @@ class Main(unittest.TestCase):
     def test_few_requests(self):
         asked = []
         checks.check_environments(REPO, lambda path: asked.append(path) or GOOD.get(path))
-        self.assertEqual(len(asked), 5)
+        self.assertEqual(len(asked), 8)
 
     def test_limit_reached_is_a_failure(self):
         def refuse(path):

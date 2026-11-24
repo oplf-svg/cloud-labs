@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
-"""The night run of one cloud, as the identity that can only delete.
+"""The night run of one cloud, as the identity that can only delete, and of the rules on GitHub.
 
-  night.py aws | azure | gcp
+  night.py aws | azure | gcp | github
 
 Every stack stands in stacks.json, with the clouds it is on and what the night does to it. A state that is
 not listed there means that something was deployed which nobody declared, and the run fails. What no state
 knows is not seen here. It also checks where the identity's rights end. A stack that a night should destroy
 needs code here first, and until then the run fails too.
 
-Runs in GitHub Actions on main, in the nightly-destroy environment. Job logs are public, so it prints its
-own words, names that look like ours, and short error codes.
+github is another part of the night, see night_github.py.
+
+Runs in GitHub Actions on main, for a cloud in the nightly-destroy environment. Job logs are public, so it
+prints its own words, names that look like ours, and short error codes.
 """
 
 import argparse
@@ -39,9 +41,14 @@ from check_sign_in import (
     github_token,
     subject_of,
 )
+from github_checks import get
+from night_github import night_github
 
 STACKS = pathlib.Path(__file__).resolve().parents[2] / "stacks.json"
 STAYS, DESTROYED = "stays", "destroyed"
+
+# Only the destroy identity of this repo may look further than its own things, so that its night has a second opinion.
+SEARCHER, SEARCH = "cloud-labs", "cloudasset.assets.searchAllResources"
 
 
 def declared(cloud, path=STACKS):
@@ -137,11 +144,13 @@ def night_azure(repo, token, env, run, send, nights):
     yield f"sign in as id-gha-{repo}-destroy", ALLOWED, got
     if got != ALLOWED:
         return
-    group = f"https://management.azure.com/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/rg-{repo}"
+    groups = f"https://management.azure.com/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups"
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
     empty = json.dumps({"properties": {"mode": "Incremental", "template": AZURE_TEMPLATE}}).encode()
-    check = f"{group}/providers/Microsoft.Resources/deployments/{NAME}/validate?api-version=2021-04-01"
+    check = f"{groups}/rg-{repo}/providers/Microsoft.Resources/deployments/{NAME}/validate?api-version=2021-04-01"
     yield "prepare a deployment", DENIED, azure(*send("POST", check, headers, empty))
+    foreign = f"{groups}/rg-github-bootstrap?api-version=2021-04-01"
+    yield "see the other resource groups", ALLOWED if repo == SEARCHER else DENIED, azure(*send("GET", foreign, headers))
 
     key, got = sign_in("https://storage.azure.com")
     yield "sign in to the state storage", ALLOWED, got
@@ -174,13 +183,18 @@ def night_gcp(repo, token, env, run, send, nights):
     key = json.loads(body)["access_token"]
 
     known, project = "resourcemanager.projects.get", env["GCP_PROJECT_ID"]
-    wanted = ["compute.instances.create", "compute.networks.create", "storage.buckets.create"]
-    question = json.dumps({"permissions": [known, *wanted]}).encode()
-    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json", "X-Goog-User-Project": project}
-    url = f"https://cloudresourcemanager.googleapis.com/v3/projects/{project}:testIamPermissions"
-    status, _, body = send("POST", url, headers, question)
-    has = json.loads(body).get("permissions", []) if status == 200 else []
-    yield "create something", DENIED, "no answer" if known not in has else ALLOWED if set(has) & set(wanted) else DENIED
+
+    def may(*permissions):
+        # Google names those of the permissions that the identity has. Nothing is tried.
+        question = json.dumps({"permissions": [known, *permissions]}).encode()
+        headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json", "X-Goog-User-Project": project}
+        url = f"https://cloudresourcemanager.googleapis.com/v3/projects/{project}:testIamPermissions"
+        status, _, body = send("POST", url, headers, question)
+        has = json.loads(body).get("permissions", []) if status == 200 else []
+        return "no answer" if known not in has else ALLOWED if set(has) & set(permissions) else DENIED
+
+    yield "create something", DENIED, may("compute.instances.create", "compute.networks.create", "storage.buckets.create")
+    yield "search the whole project", ALLOWED if repo == SEARCHER else DENIED, may(SEARCH)
 
     url = f"https://storage.googleapis.com/storage/v1/b/{env['GCP_STATE_BUCKET']}/o?prefix={repo}/"
     status, headers, body = send("GET", url, {"Authorization": f"Bearer {key}"})
@@ -193,17 +207,21 @@ def night_gcp(repo, token, env, run, send, nights):
 NIGHTS = {"aws": night_aws, "azure": night_azure, "gcp": night_gcp}
 
 
-def main(argv=None, env=os.environ, run=subprocess.run, send=answer, stacks=STACKS):
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("cloud", choices=NIGHTS)
-    cloud = parser.parse_args(argv).cloud
+def night_cloud(cloud, env, run, send, stacks):
     needed, audience, _ = CLOUDS[cloud]
+    nights = declared(cloud, stacks)
+    repo, token = prepare(needed, audience, env, send)
+    yield from NIGHTS[cloud](repo, token, env, run, send, nights)
+
+
+def main(argv=None, env=os.environ, run=subprocess.run, send=answer, stacks=STACKS, fetch=get):
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("what", choices=[*NIGHTS, "github"])
+    night = parser.parse_args(argv).what
 
     failed = False
     try:
-        nights = declared(cloud, stacks)
-        repo, token = prepare(needed, audience, env, send)
-        for what, wanted, got in NIGHTS[cloud](repo, token, env, run, send, nights):
+        for what, wanted, got in night_github(env, fetch) if night == "github" else night_cloud(night, env, run, send, stacks):
             failed = failed or got != wanted
             print(f"ok   {what}: {got}" if got == wanted else f"FAIL {what}: {got}, should be {wanted}", flush=True)
     except Unusable as problem:

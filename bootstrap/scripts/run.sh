@@ -18,9 +18,9 @@ set -euo pipefail
 
 cloud=${1:-}
 case "$cloud" in
-  aws) expected=104 ;;
-  azure) expected=91 ;;
-  gcp) expected=45 ;;
+  aws) expected=106 ;;
+  azure) expected=97 ;;
+  gcp) expected=59 ;;
   *)
     echo "usage: run.sh aws | azure | gcp" >&2
     exit 2
@@ -52,7 +52,8 @@ step() {
 }
 
 stop() {
-  printf '\nSTOPPED: %s\n' "$*" >&2
+  # Where something was changed before Terraform came, a stop must not deny it.
+  printf '\nSTOPPED: %s\n' "${*/Nothing was changed./${already:-Nothing was changed.}}" >&2
   exit 1
 }
 
@@ -234,7 +235,7 @@ gcp_last() {
 }
 
 gcp_setup() {
-  local project number account
+  local project number account apply policy role attempt
   TF_VAR_project_id=${TF_VAR_project_id:-$(ask "Id of the project that the repos deploy into: ")}
   TF_VAR_bootstrap_project_id=${TF_VAR_bootstrap_project_id:-$(ask "Id of the other, empty project for the trust and the state: ")}
   export TF_VAR_project_id TF_VAR_bootstrap_project_id
@@ -247,9 +248,12 @@ gcp_setup() {
   done
   where="Google Cloud projects $TF_VAR_project_id and $TF_VAR_bootstrap_project_id"
 
-  confirm "This turns on the Google APIs the bootstrap needs, and takes the Editor role away from the default service account of $TF_VAR_project_id." || stop "Nothing was changed."
-  gcloud services enable cloudresourcemanager.googleapis.com iam.googleapis.com storage.googleapis.com sts.googleapis.com --project "$TF_VAR_bootstrap_project_id"
-  gcloud services enable cloudresourcemanager.googleapis.com compute.googleapis.com iam.googleapis.com serviceusage.googleapis.com --project "$TF_VAR_project_id"
+  confirm "This turns on the Google APIs in services.json, and takes away in $TF_VAR_project_id: the Editor role of the default service account, and three roles of apply that it no longer has." || stop "Nothing was changed."
+  already="Terraform has changed nothing, but the services are on and the roles stay away."
+  gcloud services enable bigquery.googleapis.com cloudresourcemanager.googleapis.com iam.googleapis.com storage.googleapis.com sts.googleapis.com --project "$TF_VAR_bootstrap_project_id"
+  # All that a stack may use: apply can turn on nothing else.
+  # shellcheck disable=SC2046
+  gcloud services enable $(jq -r '.deploy[] + ".googleapis.com"' services.json) --project "$TF_VAR_project_id"
   number=$(gcloud projects describe "$TF_VAR_project_id" --format='value(projectNumber)')
   account="$number-compute@developer.gserviceaccount.com"
   # Compute Engine creates it, and its Editor role, a moment after being turned on.
@@ -259,6 +263,21 @@ gcp_setup() {
   done
   gcloud projects remove-iam-policy-binding "$TF_VAR_project_id" --condition=None --role=roles/editor \
     --member="serviceAccount:$account" > /dev/null 2>&1 || true
+  # Terraform counts a role that is no longer granted as a deletion, and this script stops at every deletion. So it takes
+  # them away itself. The next time it finds nothing to take.
+  number=$(gcloud projects describe "$TF_VAR_bootstrap_project_id" --format='value(projectNumber)')
+  apply="principalSet://iam.googleapis.com/projects/$number/locations/global/workloadIdentityPools/${TF_VAR_pool_id:-github-actions}/attribute.tier/apply"
+  policy=$(gcloud projects get-iam-policy "$TF_VAR_project_id" --format=json)
+  for role in roles/cloudkms.admin roles/monitoring.editor roles/serviceusage.serviceUsageAdmin; do
+    if jq -e --arg role "$role" --arg member "$apply" 'any(.bindings[]; .role == $role and (has("condition") | not) and any(.members[]; . == $member))' <<< "$policy" > /dev/null; then
+      # Google itself writes into the same policy while services are turned on.
+      for attempt in 1 2 3 4; do
+        [ "$attempt" != 4 ] || stop "Google did not take $role away from apply. Run the same command again."
+        if gcloud projects remove-iam-policy-binding "$TF_VAR_project_id" --condition=None --role="$role" --member="$apply" > /dev/null; then break; fi
+        sleep "${RUN_WAIT:-10}"
+      done
+    fi
+  done
   gcp_last
 
   bucket=$(gcloud storage buckets list --project "$TF_VAR_bootstrap_project_id" --filter='name~^tfstate-' --format='value(name)' | head -n 1)
@@ -424,17 +443,22 @@ esac
 "${cloud}_last"
 
 step "Check: every subject this cloud trusts"
-if diff <(jq -r '.[][]' ../subjects.json | sort) <("${cloud}_subjects" | sort); then
-  echo "ok   15 subjects match"
+if diff <(jq -r '.[][]' ../subjects.json ../cost.json | sort) <("${cloud}_subjects" | sort); then
+  echo "ok   16 subjects match"
   note "every subject matches"
 else
-  stop "The list above differs from subjects.json (< expected, > found). Everything was created, but look into this before you use it."
+  stop "The list above differs from subjects.json and cost.json (< expected, > found). Everything was created, but look into this before you use it."
 fi
 
 ending=ok
 step "For GitHub"
+# The one for the costs by itself, every time. It can be typed into GitHub's page where the clipboard does not reach.
+cost=$(terraform output -json github_secrets | jq -r '.repos["cloud-labs"].cost // {} | to_entries[] | "\(.key) = \(.value)"')
+if [ -n "$cost" ]; then
+  printf 'For the settings of cloud-labs, environment cost:\n\n  %s\n\n' "$cost"
+fi
 if [ "$system" = Darwin ] && [ "$new" = no ]; then
-  echo "Nothing new: GitHub has these ids already."
+  echo "Nothing new: GitHub has all the ids already."
   exit 0
 fi
 cat << 'EOF'

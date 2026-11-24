@@ -67,20 +67,21 @@ variables {
     cloud-labs         = 1469385611
   }
   suffixes = {
-    plan    = "environment:plan"
-    apply   = "environment:production"
-    destroy = "environment:nightly-destroy"
+    plan    = "environment:plan:ref:refs/heads/main"
+    apply   = "environment:production:ref:refs/heads/main"
+    destroy = "environment:nightly-destroy:ref:refs/heads/main"
   }
+  cost_subject = "repo:oplf-svg@228823995/cloud-labs@1469385611:environment:cost:ref:refs/heads/main"
 }
 
 run "trust" {
   command = apply
 
   assert {
-    condition = toset(flatten(regexall("\"(repo:[^\"]+)\"", google_iam_workload_identity_pool_provider.github.attribute_condition))) == toset(flatten([
+    condition = toset(flatten(regexall("\"(repo:[^\"]+)\"", google_iam_workload_identity_pool_provider.github.attribute_condition))) == toset(concat([var.cost_subject], flatten([
       for repo, id in var.repo_ids : [for suffix in values(var.suffixes) : "repo:oplf-svg@228823995/${repo}@${id}:${suffix}"]
-    ]))
-    error_message = "The provider must accept exactly the 15 literal subjects."
+    ])))
+    error_message = "The provider must accept exactly the 16 literal subjects."
   }
 
   assert {
@@ -94,11 +95,27 @@ run "trust" {
     error_message = "A token's tier must come from an exact match on its subject."
   }
 
+  # The cost identity has no tier, and nothing is ever given to those that have none.
+  assert {
+    condition = (
+      !strcontains(google_iam_workload_identity_pool_provider.github.attribute_mapping["attribute.tier"], "environment:cost")
+      && toset(keys(local.tier_principals)) == toset(["plan", "apply", "destroy"])
+      && alltrue([
+        for m in concat(
+          [for m in concat(values(google_project_iam_member.apply), values(google_project_iam_member.read), [google_project_iam_member.delete, google_project_iam_member.apply_service_accounts, google_project_iam_member.apply_grants, google_project_iam_member.apply_more_grants, google_project_iam_member.apply_services, google_project_iam_member.census]) : m.member],
+          [google_bigquery_dataset_iam_member.cost.member], [for m in values(google_logging_log_view_iam_member.apply) : m.member],
+          flatten([for b in jsondecode(google_storage_bucket_iam_policy.state.policy_data).bindings : b.members]),
+        ) : !strcontains(m, "/*") && !strcontains(m, "attribute.tier/none") && (!strcontains(m, "/attribute.") || can(regex("/attribute[.]tier/(plan|apply|destroy)$", m)))
+      ])
+    )
+    error_message = "Nothing may be given to a token without a tier, and the cost identity must be none."
+  }
+
   assert {
     condition = google_iam_workload_identity_pool_provider.github.attribute_condition == join(" && ", [
-      "assertion.sub in ${jsonencode(sort(flatten([
+      "assertion.sub in ${jsonencode(sort(concat([var.cost_subject], flatten([
         for repo, id in var.repo_ids : [for suffix in values(var.suffixes) : "repo:oplf-svg@228823995/${repo}@${id}:${suffix}"]
-      ])))}",
+      ]))))}",
       "assertion.ref == \"refs/heads/main\"",
     ])
     error_message = "Every subject must also require the main branch."
@@ -106,9 +123,9 @@ run "trust" {
 
   assert {
     condition = alltrue([
-      for s in flatten(regexall("\"(repo:[^\"]+)\"", google_iam_workload_identity_pool_provider.github.attribute_condition)) : can(regex(":environment:(plan|production|nightly-destroy)$", s))
+      for s in flatten(regexall("\"(repo:[^\"]+)\"", google_iam_workload_identity_pool_provider.github.attribute_condition)) : can(regex(":environment:(plan|production|nightly-destroy|cost):ref:refs/heads/main$", s))
     ])
-    error_message = "Only jobs in one of the three environments may be trusted, so never a pull request."
+    error_message = "Only jobs in one of the four environments and on main may be trusted, so never a pull request."
   }
 
   assert {
@@ -143,6 +160,17 @@ run "permissions" {
     error_message = "The delete role may only delete, and never the trust, roles or the project."
   }
 
+  # Only the night run of cloud-labs, and no list of offered names decides about it.
+  assert {
+    condition = (
+      google_project_iam_custom_role.census.permissions == toset(["cloudasset.assets.searchAllResources"])
+      && google_project_iam_custom_role.census.project == "example-project-1"
+      && google_project_iam_member.census.role == google_project_iam_custom_role.census.id
+      && google_project_iam_member.census.member == "principal://iam.googleapis.com/projects/123456789012/locations/global/workloadIdentityPools/github-actions/subject/repo:oplf-svg@228823995/cloud-labs@1469385611:environment:nightly-destroy:ref:refs/heads/main"
+    )
+    error_message = "Only the destroy identity of cloud-labs may search the project, and it may do nothing else by that."
+  }
+
   assert {
     condition     = google_project_iam_custom_role.service_accounts.permissions == toset(["iam.serviceAccounts.create", "iam.serviceAccounts.delete"])
     error_message = "Apply may manage service accounts, but not their keys or who may use them."
@@ -156,7 +184,12 @@ run "permissions" {
   # Google refuses a longer list.
   assert {
     condition     = length(local.grantable_roles) <= 10 && length(local.grantable_roles) == length(toset(local.grantable_roles))
-    error_message = "At most ten roles can be grantable."
+    error_message = "At most ten roles can be grantable in one list."
+  }
+
+  assert {
+    condition     = local.more_grantable_roles == ["roles/cloudsql.instanceUser"] && length(setintersection(toset(local.more_grantable_roles), toset(local.grantable_roles))) == 0
+    error_message = "The second list holds one role, which is not in the first."
   }
 
   # setIamPolicy appears in one role only, and that role is granted only under the condition.
@@ -164,8 +197,18 @@ run "permissions" {
     condition = (
       length([for r in [google_project_iam_custom_role.read, google_project_iam_custom_role.delete, google_project_iam_custom_role.service_accounts] : r if length([for p in r.permissions : p if can(regex("(?i)setIamPolicy|actAs", p))]) > 0]) == 0
       && length(google_project_iam_member.apply_grants.condition) == 1
+      && length(google_project_iam_member.apply_more_grants.condition) == 1
     )
     error_message = "Changing access must always be limited by the condition."
+  }
+
+  # Apply may make these, so destroy has to see them and be able to delete them.
+  assert {
+    condition = alltrue([
+      for type in ["cloudsql.backupRuns", "cloudsql.instances", "container.clusters", "run.instances", "run.jobs", "run.services", "run.workerpools"] :
+      contains(local.read_permissions, "${type}.get") && contains(local.read_permissions, "${type}.list") && contains(local.delete_permissions, "${type}.delete")
+    ])
+    error_message = "What apply may make and what costs, destroy must see and delete."
   }
 
   # The delete role may also hold the three helper permissions named here, and nothing else.
@@ -184,7 +227,7 @@ run "permissions" {
 
   assert {
     condition = alltrue([
-      for m in concat(values(google_project_iam_member.apply), [google_project_iam_member.apply_service_accounts, google_project_iam_member.apply_grants]) :
+      for m in concat(values(google_project_iam_member.apply), [google_project_iam_member.apply_service_accounts, google_project_iam_member.apply_grants, google_project_iam_member.apply_more_grants, google_project_iam_member.apply_services]) :
       m.member == "principalSet://iam.googleapis.com/projects/123456789012/locations/global/workloadIdentityPools/github-actions/attribute.tier/apply"
     ])
     error_message = "Deploy rights belong to the apply tier only."
@@ -192,23 +235,161 @@ run "permissions" {
 
   assert {
     condition = length(setintersection(
-      toset(concat(local.apply_roles, local.grantable_roles)),
+      toset(concat(local.apply_roles, local.grantable_roles, local.more_grantable_roles)),
       toset(["roles/owner", "roles/editor", "roles/viewer", "roles/admin", "roles/writer", "roles/compute.admin", "roles/bigquery.admin", "roles/aiplatform.admin", "roles/iam.admin", "roles/iam.securityAdmin", "roles/iam.serviceAccountAdmin", "roles/iam.serviceAccountKeyAdmin", "roles/iam.serviceAccountTokenCreator", "roles/iam.workloadIdentityPoolAdmin", "roles/resourcemanager.projectIamAdmin"]),
     )) == 0
     error_message = "Roles that administer access must be neither held nor grantable."
   }
 
   assert {
-    condition     = startswith(google_project_iam_member.apply_grants.condition[0].expression, "api.getAttribute(\"iam.googleapis.com/modifiedGrantsByRole\", []).hasOnly([")
+    condition = (
+      startswith(google_project_iam_member.apply_grants.condition[0].expression, "api.getAttribute(\"iam.googleapis.com/modifiedGrantsByRole\", []).hasOnly([")
+      && google_project_iam_member.apply_more_grants.condition[0].expression == "api.getAttribute(\"iam.googleapis.com/modifiedGrantsByRole\", []).hasOnly([\"roles/cloudsql.instanceUser\"])"
+      && google_project_iam_member.apply_more_grants.role == google_project_iam_custom_role.project_grants.id
+    )
     error_message = "Apply may change project access only under a condition."
   }
 
   assert {
     condition = alltrue([
-      for m in concat(values(google_project_iam_member.apply), values(google_project_iam_member.read), [google_project_iam_member.delete, google_project_iam_member.apply_service_accounts, google_project_iam_member.apply_grants]) :
+      for m in concat(values(google_project_iam_member.apply), values(google_project_iam_member.read), [google_project_iam_member.delete, google_project_iam_member.apply_service_accounts, google_project_iam_member.apply_grants, google_project_iam_member.apply_more_grants, google_project_iam_member.apply_services, google_project_iam_member.census]) :
       m.project == "example-project-1"
     ])
     error_message = "No pipeline may have a project role in the bootstrap project."
+  }
+}
+
+run "logs" {
+  command = apply
+
+  # Two logs and no more, each in a view of its own.
+  assert {
+    condition = { for name, view in google_logging_log_view.containers : name => view.filter } == {
+      stderr = "SOURCE(\"projects/example-project-1\") AND LOG_ID(\"run.googleapis.com/stderr\")"
+      stdout = "SOURCE(\"projects/example-project-1\") AND LOG_ID(\"run.googleapis.com/stdout\")"
+    }
+    error_message = "Only what the containers on Cloud Run print may be shown."
+  }
+
+  # No test with a pretended provider would notice: with a long name, the real one stops in the middle of an apply.
+  assert {
+    condition = alltrue([
+      for view in values(google_logging_log_view.containers) : view.bucket == "_Default" && view.location == "global" && view.parent == "projects/example-project-1"
+    ])
+    error_message = "A view is named by its short names."
+  }
+
+  assert {
+    condition = { for name, member in google_logging_log_view_iam_member.apply : name => [member.parent, member.location, member.bucket, member.name, member.role, member.member] } == {
+      for name in ["stderr", "stdout"] : name => ["projects/example-project-1", "global", "_Default", "containers-${name}", "roles/logging.viewAccessor", "principalSet://iam.googleapis.com/projects/123456789012/locations/global/workloadIdentityPools/github-actions/attribute.tier/apply"]
+    }
+    error_message = "Apply, and nobody else, may read the two views."
+  }
+
+  # On the project, these would open the audit log or every view.
+  assert {
+    condition = length(setintersection(
+      toset(concat(local.apply_roles, local.grantable_roles, local.more_grantable_roles)),
+      toset(["roles/logging.admin", "roles/logging.fieldAccessor", "roles/logging.linkViewer", "roles/logging.privateLogViewer", "roles/logging.viewAccessor", "roles/logging.viewer"]),
+    )) == 0
+    error_message = "No role on the project may read logs."
+  }
+}
+
+run "services" {
+  command = apply
+
+  # Apply turns no service on or off. These are all of Google's roles that could, by its own page of 24 November 2026.
+  assert {
+    condition = length(setintersection(
+      toset(concat(local.apply_roles, local.grantable_roles, local.more_grantable_roles)),
+      toset(["roles/admin", "roles/assuredoss.admin", "roles/assuredoss.projectAdmin", "roles/commercebusinessenablement.admin", "roles/consumerprocurement.entitlementManager", "roles/consumerprocurement.procurementAdmin", "roles/editor", "roles/iam.dataScientist", "roles/iam.databasesAdmin", "roles/iam.devOps", "roles/iam.infrastructureAdmin", "roles/iam.networkAdmin", "roles/iam.siteReliabilityEngineer", "roles/monitoring.admin", "roles/monitoring.editor", "roles/owner", "roles/securitycenter.admin", "roles/servicemanagement.quotaAdmin", "roles/serviceusage.serviceUsageAdmin", "roles/stackdriver.accounts.editor", "roles/telcoautomation.admin", "roles/writer"]),
+    )) == 0
+    error_message = "A role of apply can turn services on or off."
+  }
+
+  assert {
+    condition = (
+      google_project_iam_custom_role.services.permissions == toset(["serviceusage.services.get", "serviceusage.services.list", "serviceusage.services.use"])
+      && google_project_iam_custom_role.services.project == "example-project-1"
+      && google_project_iam_member.apply_services.role == google_project_iam_custom_role.services.id
+    )
+    error_message = "Apply may see which services are on, and nothing more."
+  }
+
+  # No pipeline may turn one on or off in any other way either.
+  assert {
+    condition = alltrue([
+      for p in concat(tolist(local.read_permissions), tolist(local.delete_permissions), tolist(local.service_account_permissions)) : !can(regex("^serviceusage[.](services[.](enable|disable)|consumerpolicy[.]update|quotas[.]update|mcppolicy[.]update)$|^cloudquotas[.]quotas[.]update$", p))
+    ])
+    error_message = "A custom role can turn services on or off."
+  }
+
+  # What a stack may use. A model service, a key service or a network that is paid by the hour is not among them.
+  assert {
+    condition     = local.services == ["bigquery", "cloudasset", "cloudresourcemanager", "cloudscheduler", "compute", "container", "iam", "logging", "monitoring", "pubsub", "run", "secretmanager", "serviceusage", "sqladmin", "storage"]
+    error_message = "The list of services is not the agreed one."
+  }
+}
+
+run "cost" {
+  command = apply
+
+  assert {
+    condition = (
+      google_bigquery_dataset_iam_member.cost.member == "iamMember:principal://iam.googleapis.com/projects/123456789012/locations/global/workloadIdentityPools/github-actions/subject/${var.cost_subject}"
+      && google_bigquery_dataset_iam_member.cost.project == "example-bootstrap-1"
+      && google_bigquery_dataset_iam_member.cost.dataset_id == "billing_export"
+      && google_bigquery_dataset_iam_member.cost.role == google_project_iam_custom_role.cost.id
+      && length(google_bigquery_dataset_iam_member.cost.condition) == 0
+    )
+    error_message = "One literal subject may read one dataset."
+  }
+
+  assert {
+    condition = (
+      google_project_iam_custom_role.cost.permissions == toset(["bigquery.tables.get", "bigquery.tables.getData", "bigquery.tables.list"])
+      && google_project_iam_custom_role.cost.project == "example-bootstrap-1"
+    )
+    error_message = "The cost role may list and read tables, and nothing else. It may not run a query."
+  }
+
+  assert {
+    condition = (
+      google_bigquery_dataset.billing_export.project == "example-bootstrap-1"
+      && google_bigquery_dataset.billing_export.location == "europe-west2"
+      && !google_bigquery_dataset.billing_export.delete_contents_on_destroy
+      && google_bigquery_dataset.billing_export.default_table_expiration_ms == null
+      && google_bigquery_dataset.billing_export.default_partition_expiration_ms == null
+      && length(google_bigquery_dataset.billing_export.default_encryption_configuration) == 0
+    )
+    error_message = "The costs must lie where no pipeline has a project role, and stay."
+  }
+
+  # Google's export account becomes an owner that Terraform does not know. Whatever sets the whole access list takes that
+  # away, and the export stops without a word.
+  assert {
+    condition = google_bigquery_dataset.billing_export.dataset_id == "billing_export" && alltrue([
+      for file in fileset(".", "*.tf") : !can(regex("(?m)^[^#]*(google_bigquery_dataset_(access|iam_policy|iam_binding)|\\baccess\\s*[{=])", file(file)))
+    ])
+    error_message = "Nothing may set the whole access list of the dataset."
+  }
+
+  # No role in any project, no tier, no state.
+  assert {
+    condition = alltrue([
+      for m in concat(
+        [for m in concat(values(google_project_iam_member.apply), values(google_project_iam_member.read), [google_project_iam_member.delete, google_project_iam_member.apply_service_accounts, google_project_iam_member.apply_grants, google_project_iam_member.apply_more_grants, google_project_iam_member.apply_services, google_project_iam_member.census]) : m.member],
+        [for m in values(google_logging_log_view_iam_member.apply) : m.member],
+        flatten([for b in jsondecode(google_storage_bucket_iam_policy.state.policy_data).bindings : b.members]),
+      ) : !strcontains(m, "environment:cost")
+    ])
+    error_message = "The cost identity must have no role in a project and no right to any state."
+  }
+
+  assert {
+    condition     = jsondecode(file("../cost.json")) == { cloud-labs = { cost = var.cost_subject } } && contains(output.trusted_subjects, var.cost_subject) && length(output.trusted_subjects) == 16
+    error_message = "cost.json holds one subject, and the pool trusts that one and the 15."
   }
 }
 
@@ -266,7 +447,7 @@ run "github_secrets" {
     condition = output.github_secrets == {
       cloud = "gcp"
       repos = {
-        for repo, id in var.repo_ids : repo => {
+        for repo, id in var.repo_ids : repo => merge({
           repository = {
             GCP_PROJECT_ID                 = "example-project-1"
             GCP_PROJECT_NUMBER             = "210987654321"
@@ -275,10 +456,10 @@ run "github_secrets" {
           }
           production      = {}
           nightly-destroy = {}
-        }
+        }, { for name in ["cost"] : name => { GCP_COST_PROJECT_ID = "example-bootstrap-1" } if repo == "cloud-labs" })
       }
     }
-    error_message = "Every repo gets the provider, the project it deploys into and the state bucket."
+    error_message = "Every repo gets the provider, the project it deploys into and the state bucket, and only cloud-labs the place of the costs."
   }
 }
 

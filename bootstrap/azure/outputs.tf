@@ -19,13 +19,13 @@ output "state_bucket" {
 }
 
 output "github_secrets" {
-  description = "Input for scripts/load_secrets.py. A job in production or nightly-destroy gets that environment's value, any other job gets the plan identity, which only a job in plan can use."
+  description = "Input for scripts/load_secrets.py. A job in production, nightly-destroy or cost gets that environment's value, any other job gets the plan identity, which only a job in plan can use."
   sensitive   = true
 
   value = {
     cloud = "azure"
     repos = {
-      for repo in keys(local.subjects) : repo => {
+      for repo in keys(local.subjects) : repo => merge({
         repository = {
           AZURE_CLIENT_ID       = azurerm_user_assigned_identity.ci["${repo}/plan"].client_id
           AZURE_STATE_ACCOUNT   = azurerm_storage_account.state.name
@@ -38,12 +38,12 @@ output "github_secrets" {
         nightly-destroy = {
           AZURE_CLIENT_ID = azurerm_user_assigned_identity.ci["${repo}/destroy"].client_id
         }
-      }
+      }, { for name, secrets in local.cost_secrets : name => secrets if repo == "cloud-labs" })
     }
   }
 }
 
 output "trusted_subjects" {
   description = "Every subject this subscription trusts."
-  value       = sort([for c in azurerm_federated_identity_credential.ci : c.subject])
+  value       = sort(concat([for c in azurerm_federated_identity_credential.ci : c.subject], [azurerm_federated_identity_credential.cost.subject]))
 }

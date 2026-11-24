@@ -1,27 +1,27 @@
 {
   "webhook-platform": {
-    "plan": "repo:oplf-svg@228823995/webhook-platform@1469384538:environment:plan",
-    "apply": "repo:oplf-svg@228823995/webhook-platform@1469384538:environment:production",
-    "destroy": "repo:oplf-svg@228823995/webhook-platform@1469384538:environment:nightly-destroy"
+    "plan": "repo:oplf-svg@228823995/webhook-platform@1469384538:environment:plan:ref:refs/heads/main",
+    "apply": "repo:oplf-svg@228823995/webhook-platform@1469384538:environment:production:ref:refs/heads/main",
+    "destroy": "repo:oplf-svg@228823995/webhook-platform@1469384538:environment:nightly-destroy:ref:refs/heads/main"
   },
   "k8s-platform-lab": {
-    "plan": "repo:oplf-svg@228823995/k8s-platform-lab@1469385215:environment:plan",
-    "apply": "repo:oplf-svg@228823995/k8s-platform-lab@1469385215:environment:production",
-    "destroy": "repo:oplf-svg@228823995/k8s-platform-lab@1469385215:environment:nightly-destroy"
+    "plan": "repo:oplf-svg@228823995/k8s-platform-lab@1469385215:environment:plan:ref:refs/heads/main",
+    "apply": "repo:oplf-svg@228823995/k8s-platform-lab@1469385215:environment:production:ref:refs/heads/main",
+    "destroy": "repo:oplf-svg@228823995/k8s-platform-lab@1469385215:environment:nightly-destroy:ref:refs/heads/main"
   },
   "ai-ops-agent": {
-    "plan": "repo:oplf-svg@228823995/ai-ops-agent@1469385344:environment:plan",
-    "apply": "repo:oplf-svg@228823995/ai-ops-agent@1469385344:environment:production",
-    "destroy": "repo:oplf-svg@228823995/ai-ops-agent@1469385344:environment:nightly-destroy"
+    "plan": "repo:oplf-svg@228823995/ai-ops-agent@1469385344:environment:plan:ref:refs/heads/main",
+    "apply": "repo:oplf-svg@228823995/ai-ops-agent@1469385344:environment:production:ref:refs/heads/main",
+    "destroy": "repo:oplf-svg@228823995/ai-ops-agent@1469385344:environment:nightly-destroy:ref:refs/heads/main"
   },
   "event-pipeline-lab": {
-    "plan": "repo:oplf-svg@228823995/event-pipeline-lab@1469385472:environment:plan",
-    "apply": "repo:oplf-svg@228823995/event-pipeline-lab@1469385472:environment:production",
-    "destroy": "repo:oplf-svg@228823995/event-pipeline-lab@1469385472:environment:nightly-destroy"
+    "plan": "repo:oplf-svg@228823995/event-pipeline-lab@1469385472:environment:plan:ref:refs/heads/main",
+    "apply": "repo:oplf-svg@228823995/event-pipeline-lab@1469385472:environment:production:ref:refs/heads/main",
+    "destroy": "repo:oplf-svg@228823995/event-pipeline-lab@1469385472:environment:nightly-destroy:ref:refs/heads/main"
   },
   "cloud-labs": {
-    "plan": "repo:oplf-svg@228823995/cloud-labs@1469385611:environment:plan",
-    "apply": "repo:oplf-svg@228823995/cloud-labs@1469385611:environment:production",
-    "destroy": "repo:oplf-svg@228823995/cloud-labs@1469385611:environment:nightly-destroy"
+    "plan": "repo:oplf-svg@228823995/cloud-labs@1469385611:environment:plan:ref:refs/heads/main",
+    "apply": "repo:oplf-svg@228823995/cloud-labs@1469385611:environment:production:ref:refs/heads/main",
+    "destroy": "repo:oplf-svg@228823995/cloud-labs@1469385611:environment:nightly-destroy:ref:refs/heads/main"
   }
 }

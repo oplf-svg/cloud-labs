@@ -1,6 +1,7 @@
 """Runs deploy.py against stand-ins for GitHub, Terraform, AWS, Azure and the public site. Nothing real is called."""
 
 import contextlib
+import copy
 import datetime
 import email.message
 import hashlib
@@ -23,6 +24,7 @@ import deploy
 
 sys.path.insert(0, str(deploy.SCRIPTS))
 from test_check_sign_in import jwt
+from test_github_checks import GOOD
 
 ACCOUNT, BUCKET = "111122223333", "tfstate-0a1b2c3d"
 CLIENT_ID, SUBSCRIPTION, TENANT, STORAGE, LOOKING_ID = (f"{digit * 8}-{digit * 4}-{digit * 4}-{digit * 4}-{digit * 12}" for digit in "12345")
@@ -35,6 +37,8 @@ AZURE_STATE = f"{BACKEND['container_name']}/{BACKEND['key']}"
 ROLES = {tier: f"arn:aws:iam::{ACCOUNT}:role/github-actions/gha-cloud-labs-{tier}" for tier in ("plan", "apply")}
 CLIENTS = {"plan": LOOKING_ID, "apply": CLIENT_ID}
 TOKENS = {tier: jwt(deploy.SUBJECTS["cloud-labs"][tier]) for tier in ROLES}
+# The rules as they should be. What GitHub says about the night run and the commits has a question mark in it.
+RULES = {path: answer for path, answer in GOOD.items() if "?" not in path}
 GITHUB = "github-token-of-the-job"
 HIDDEN = [ACCOUNT, BUCKET, *ROLES.values(), *CLIENTS.values(), SUBSCRIPTION, TENANT, STORAGE, SECRET, SESSION, BEARER, STORE_BEARER, *TOKENS.values(), ASKING, GITHUB]
 
@@ -103,6 +107,7 @@ class World:
         self.plan = {"format_version": "1.2", "complete": True, "errored": False, "resource_changes": NEW[cloud] if plan is None else plan}
         self.ran, self.sent, self.asked, self.environments, self.slept = [], [], [], [], 0
         self.there, self.plans, self.registered, self.night = {}, [], "Registered", "success"
+        self.rules = copy.deepcopy(RULES)
         self.site, self.extra, self.visits, self.newest = dict(FILES), {}, 0, "c0ffee"
 
     # What is started on the machine.
@@ -227,9 +232,11 @@ class World:
             return 301, headers(SAFE | {"Location": parts.path + "/"}), b""
         return 404, headers(SAFE | {"Content-Type": "text/html"}), self.site["404.html"]
 
-    # What GitHub says about the night run.
+    # What GitHub says about the night run, and about the rules.
     def fetch(self, path):
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        if path in self.rules:
+            return self.rules[path]
         if "/runs?" in path:
             return {"workflow_runs": [{"created_at": now, "status": "completed", "conclusion": self.night}]}
         if "/commits?path=site" in path:
@@ -385,6 +392,46 @@ class Deploy(unittest.TestCase):
         world.site[deploy.LIST] = b"0" * 64 + b"  ::error::pwned\n"
         code, output = self.go("look", world)
         self.assertEqual((code, "pwned" in output, [url for url in world.asked if "pwned" in url]), (0, False, []))
+
+    def test_a_look_by_the_clock_is_red_if_there_is_anything_to_do(self):
+        place = {"aws": AWS_PLACE, "azure": AZURE_PLACE}
+        adjusted = {"aws": SWITCHED_ON, "azure": change("azapi_resource.site", "update", before={"x": "a"}, after={"x": "b"})}
+
+        def look(cloud, plan, live, **env):
+            world = World(cloud, plan=plan, place=live and place[cloud])
+            world.there = {name: hashlib.md5(body).hexdigest() for name, body in (live or {}).items()}
+            world.site = dict(live or {})
+            code, output = self.go("look", world, **env)
+            self.assertEqual(self.changed(world), [])
+            return code, output
+
+        for cloud in place:
+            by_clock = {"GITHUB_EVENT_NAME": "schedule"}
+            code, output = look(cloud, [], FILES, **by_clock)
+            self.assertEqual((code, self.mark), (0, ""), output)
+            self.assertTrue(output.endswith("\nWhat is live is what main says.\n"), output)
+            for what, plan, live in (
+                ("create ", None, None),
+                (f"update {adjusted[cloud]['address']}", [adjusted[cloud]], FILES),
+                ("9 new, 0 changed, 0 removed", [], {"404.html": FILES["404.html"]} if cloud == "azure" else {}),
+                ("0 new, 1 changed, 0 removed", [], FILES | {"index.html": b"by hand"}),
+                ("0 new, 1 changed, 0 removed", [], FILES | {"404.html": b"by hand"}),
+                ("0 new, 2 changed, 1 removed", [], with_list(FILES | {"index.html": b"before", "old/index.html": b"old"})),
+                ("1 new, 1 changed, 0 removed", [], with_list({name: body for name, body in FILES.items() if name not in ("robots.txt", deploy.LIST)})),
+                # Azure has no list of its own, so what its own list does not name is not seen there.
+                *([("0 new, 0 changed, 1 removed", [], FILES | {"old/index.html": b"old"})] if cloud == "aws" else []),
+            ):
+                with self.subTest(cloud=cloud, what=what):
+                    code, output = look(cloud, plan, live, **by_clock)
+                    self.assertEqual((code, self.mark), (1, ""), output)
+                    self.assertIn(what, output)
+                    self.assertTrue(output.endswith("\nStopped. What is live is not what main says: somebody has changed it, or a deploy is still to be approved.\n"), output)
+                    # Whoever starts it wants to see that, and may deploy it.
+                    for env in ({}, {"GITHUB_EVENT_NAME": "push"}, {"GITHUB_EVENT_NAME": "workflow_dispatch"}):
+                        code, output = look(cloud, plan, live, **env)
+                        self.assertEqual(code, 0, output)
+                        self.assertRegex(self.mark, "^[0-9a-f]{64}$")
+                        self.assertNotIn("What is live", output)
 
     def test_does_what_was_looked_at_on_aws(self):
         old = {"old/index.html": "0" * 32}
@@ -590,6 +637,26 @@ class Deploy(unittest.TestCase):
                 self.assertEqual((code, self.changed(world), world.asked), (1, [], []))
                 self.assertIn("The state names something that is not part of the site.", output)
 
+    def test_waits_until_the_rules_on_github_are_there(self):
+        base = "/repos/oplf-svg/cloud-labs"
+        changes = {
+            "environment production must have a required reviewer": lambda rules: rules[f"{base}/environments"]["environments"][0].update(protection_rules=[{"type": "branch_policy"}]),
+            "environment plan allows more or less than the main branch": lambda rules: rules[f"{base}/environments/plan/deployment-branch-policies"]["branch_policies"].append({"name": "*", "type": "branch"}),
+            "GitHub's subject does not end with the branch": lambda rules: rules[f"{base}/actions/oidc/customization/sub"].update(use_default=True),
+            "main does not need the check ci from everyone": lambda rules: rules[f"{base}/branches/main"].update(protected=False),
+            "repo is not public": lambda rules: rules[base].update(private=True),
+        }
+        for cloud in ("aws", "azure"):
+            mark = self.looked(cloud)
+            for problem, change_rules in changes.items():
+                with self.subTest(cloud=cloud, problem=problem):
+                    world = World(cloud)
+                    change_rules(world.rules)
+                    code, output = self.go("apply", world, mark)
+                    # Before there is a token of any kind.
+                    self.assertEqual((code, world.ran, world.sent), (1, [], []))
+                    self.assertIn(f"Not deployed, because of the rules on GitHub: {problem}.", output)
+
     def test_waits_until_the_night_run_works(self):
         for cloud in ("aws", "azure"):
             world = World(cloud)
@@ -721,7 +788,7 @@ class Consistent(unittest.TestCase):
         closed = {rule["route"] for rule in config["routes"][:-1] if rule.get("statusCode") == 404}
         self.assertLessEqual({*deploy.SIGN_IN, "/.auth/*"}, closed)
 
-    def test_only_the_deploys_wait_for_an_approval(self):
+    def test_only_the_deploys_wait_for_an_approval_and_the_clock_starts_none(self):
         text = (deploy.SITE.parent / ".github/workflows/site.yml").read_text()
         jobs = dict(re.findall(r"^  ([a-z-]+):\n((?:(?:    .*)?\n)+)", text.partition("\njobs:\n")[2] + "\n", re.M))
         self.assertEqual(set(jobs), {"build", "look-azure", "look-aws", "deploy-azure", "deploy-aws"})
@@ -734,9 +801,11 @@ class Consistent(unittest.TestCase):
             used = re.findall(r"^      (\w+): \$\{\{ secrets\.(\w+) \}\}$", job, re.M)
             self.assertEqual(sorted(used), sorted((secret, secret) for secret in deploy.CLOUDS[cloud][0]), name)
             self.assertEqual(job.count("secrets."), len(used), name)
+        # What the clock starts has a lane of its own, so it never stands in front of a deploy, or pushes one out that waits.
+        self.assertIn("\nconcurrency:\n  group: site-${{ github.event.pull_request.number || github.event_name == 'schedule' && 'morning' || 'main' }}\n", text)
         # A deploy does only what its own look has shown, and the two never wait for an approval together.
         for cloud, needs in (("azure", "[look-azure, look-aws]"), ("aws", "[look-aws, deploy-azure]")):
-            self.assertIn(f"    if: ${{{{ !cancelled() && needs.look-{cloud}.result == 'success' }}}}\n    needs: {needs}\n", jobs[f"deploy-{cloud}"])
+            self.assertIn(f"    if: ${{{{ !cancelled() && github.event_name != 'schedule' && needs.look-{cloud}.result == 'success' }}}}\n    needs: {needs}\n", jobs[f"deploy-{cloud}"])
             self.assertIn(f"      FINGERPRINT: ${{{{ needs.look-{cloud}.outputs.fingerprint }}}}\n", jobs[f"deploy-{cloud}"])
             self.assertIn("    if: ${{ github.event_name != 'pull_request' }}\n    needs: build\n", jobs[f"look-{cloud}"])
 

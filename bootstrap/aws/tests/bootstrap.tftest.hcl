@@ -46,10 +46,11 @@ variables {
     cloud-labs         = 1469385611
   }
   suffixes = {
-    plan    = "environment:plan"
-    apply   = "environment:production"
-    destroy = "environment:nightly-destroy"
+    plan    = "environment:plan:ref:refs/heads/main"
+    apply   = "environment:production:ref:refs/heads/main"
+    destroy = "environment:nightly-destroy:ref:refs/heads/main"
   }
+  cost_subject = "repo:oplf-svg@228823995/cloud-labs@1469385611:environment:cost:ref:refs/heads/main"
 }
 
 run "trust" {
@@ -95,9 +96,9 @@ run "trust" {
   assert {
     condition = alltrue([
       for role in aws_iam_role.ci :
-      can(regex(":environment:(plan|production|nightly-destroy)$", jsondecode(role.assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"]))
+      can(regex(":environment:(plan|production|nightly-destroy):ref:refs/heads/main$", jsondecode(role.assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"]))
     ])
-    error_message = "Only jobs in one of the three environments may be trusted, so never a pull request."
+    error_message = "Only jobs in one of the three environments and on main may be trusted, so never a pull request."
   }
 }
 
@@ -193,6 +194,20 @@ run "permissions" {
     error_message = "No pipeline, and nothing that one creates, may change a flat-rate plan."
   }
 
+  # Accepting terms is a person's own decision, for models as for anything that is sold on Marketplace.
+  assert {
+    condition = alltrue([
+      for p in [aws_iam_policy.guardrails, aws_iam_policy.workload_boundary] : alltrue([
+        for a in ["aws-marketplace:AcceptAgreementRequest", "aws-marketplace:CreateAgreementRequest", "aws-marketplace:Subscribe", "bedrock:CreateFoundationModelAgreement", "bedrock:PutFoundationModelEntitlement", "bedrock:PutUseCaseForModelAccess"] :
+        anytrue([
+          for s in jsondecode(p.policy).Statement : anytrue([for d in flatten([s.Action]) : can(regex("^${replace(d, "*", ".*")}$", a))])
+          if s.Effect == "Deny" && try(s.Resource, "") == "*" && can(s.Action) && !can(s.Condition)
+        ])
+      ])
+    ])
+    error_message = "No pipeline, and nothing that one creates, may accept the terms of a model or of Marketplace."
+  }
+
   # What the look at the site needs, and the AWS policies leave out.
   assert {
     condition = alltrue([
@@ -200,6 +215,15 @@ run "permissions" {
       contains(flatten([for s in jsondecode(aws_iam_policy.read_extras.policy).Statement : s.Action if s.Effect == "Allow"]), a)
     ])
     error_message = "Plan must be able to look at a site on CloudFront."
+  }
+
+  # What Terraform reads of Cloud Map, also while it deletes there, and what a night asks to see that nothing is left.
+  assert {
+    condition = alltrue([
+      for a in ["GetNamespace", "GetOperation", "GetService", "ListInstances", "ListNamespaces", "ListServices", "ListTagsForResource"] :
+      contains(flatten([for s in jsondecode(aws_iam_policy.read_extras.policy).Statement : s.Action if s.Effect == "Allow"]), "servicediscovery:${a}")
+    ])
+    error_message = "Plan and destroy must be able to read the way from an API Gateway to containers."
   }
 
   assert {
@@ -215,6 +239,143 @@ run "permissions" {
       s.Condition.StringEquals["iam:PermissionsBoundary"] == "arn:aws:iam::111122223333:policy/github-actions/workload-boundary" if s.Sid == "GrantOnlyUnderBoundary"
     ])
     error_message = "Workload roles must be created under the boundary."
+  }
+}
+
+run "models" {
+  command = apply
+
+  # The form of an entry. A name with a wildcard in it would be more than one model.
+  assert {
+    condition = alltrue([
+      for name, m in local.models :
+      can(regex("^[a-z0-9-]+$", name))
+      && jsonencode(keys(m)) == jsonencode(["aws"])
+      && jsonencode(keys(m.aws)) == jsonencode(["model", "profile", "regions"])
+      && can(regex("^[a-z0-9]+[.][a-z0-9.:-]+$", m.aws.model))
+      && (
+        m.aws.profile == null ? jsonencode(m.aws.regions) == jsonencode(["eu-west-2"])
+        : m.aws.profile == "eu.${m.aws.model}" ? jsonencode(m.aws.regions) == jsonencode(["eu-*"])
+        : m.aws.profile == "global.${m.aws.model}" && jsonencode(m.aws.regions) == jsonencode(["eu-west-2", ""])
+      )
+    ])
+    error_message = "A model in models.json is one model, in London, in Europe or worldwide."
+  }
+
+  # Written out again here on purpose, so that a change to models.json fails the test.
+  assert {
+    condition = jsonencode([for s in jsondecode(aws_iam_policy.workload_boundary.policy).Statement : s if s.Sid == "OnlyListedModels"]) == jsonencode([{
+      Sid    = "OnlyListedModels"
+      Effect = "Deny"
+      Action = "bedrock:Invoke*"
+      NotResource = [
+        "arn:aws:bedrock:eu-west-2:111122223333:inference-profile/eu.anthropic.claude-haiku-5-5",
+        "arn:aws:bedrock:eu-*::foundation-model/anthropic.claude-haiku-5-5",
+        "arn:aws:bedrock:eu-west-2:111122223333:project/*",
+      ]
+    }])
+    error_message = "A workload may call the one model in the list, through its European profile, and no other."
+  }
+
+  # From AWS's own list of actions: what runs, trains or hosts a model, or signs in with a key.
+  assert {
+    condition = alltrue([
+      for p in [aws_iam_policy.guardrails, aws_iam_policy.workload_boundary] : alltrue([
+        for a in [
+          "bedrock-mantle:CallWithBearerToken", "bedrock-mantle:CreateCustomizedModel", "bedrock-mantle:CreateFineTuningJob", "bedrock-mantle:CreateInference", "bedrock-mantle:CreateReservation", "bedrock-mantle:UpdateReservation",
+          "bedrock:AgenticRetrieveStream", "bedrock:CallWithBearerToken", "bedrock:CreateAdvancedPromptOptimizationJob", "bedrock:CreateCustomModel", "bedrock:CreateCustomModelDeployment", "bedrock:CreateEvaluationJob",
+          "bedrock:CreateInferenceProfile", "bedrock:CreateMarketplaceModelEndpoint", "bedrock:CreateModelCopyJob", "bedrock:CreateModelCustomizationJob", "bedrock:CreateModelEvaluationJob", "bedrock:CreateModelImportJob",
+          "bedrock:CreateModelInvocationJob", "bedrock:CreatePromptRouter", "bedrock:CreateProvisionedModelThroughput", "bedrock:GenerateQuery", "bedrock:IngestKnowledgeBaseDocuments", "bedrock:OptimizePrompt",
+          "bedrock:RegisterMarketplaceModelEndpoint", "bedrock:Rerank", "bedrock:Retrieve", "bedrock:RetrieveAndGenerate", "bedrock:StartAutomatedReasoningPolicyBuildWorkflow", "bedrock:StartAutomatedReasoningPolicyTestWorkflow",
+          "bedrock:StartFlowExecution", "bedrock:StartIngestionJob", "bedrock:UpdateCustomModelDeployment", "bedrock:UpdateMarketplaceModelEndpoint", "bedrock:UpdateProvisionedModelThroughput",
+        ] :
+        anytrue([
+          for s in jsondecode(p.policy).Statement : anytrue([for d in flatten([s.Action]) : can(regex("^${replace(d, "*", ".*")}$", a))])
+          if s.Effect == "Deny" && try(s.Resource, "") == "*" && can(s.Action) && !can(s.Condition)
+        ])
+      ])
+    ])
+    error_message = "No pipeline, and nothing that one creates, may use models in another way than by calling a listed one."
+  }
+
+  assert {
+    condition = alltrue([
+      for a in ["InvokeAgent", "InvokeBuilder", "InvokeDataAutomationAsync", "InvokeFlow", "InvokeInlineAgent", "InvokeModel", "InvokeModelWithResponseStream", "InvokeTool"] :
+      anytrue([
+        for s in jsondecode(aws_iam_policy.guardrails.policy).Statement : anytrue([for d in flatten([s.Action]) : can(regex("^${replace(d, "*", ".*")}$", "bedrock:${a}"))])
+        if s.Effect == "Deny" && try(s.Resource, "") == "*" && can(s.Action) && !can(s.Condition)
+      ])
+    ])
+    error_message = "No pipeline may call a model itself."
+  }
+
+  # Otherwise the list would be worth nothing: a workload could call no model at all.
+  assert {
+    condition = alltrue([
+      for a in ["InvokeModel", "InvokeModelWithResponseStream"] : !anytrue([
+        for s in jsondecode(aws_iam_policy.workload_boundary.policy).Statement : anytrue([for d in flatten([s.Action]) : can(regex("^${replace(d, "*", ".*")}$", "bedrock:${a}"))])
+        if s.Effect == "Deny" && try(s.Resource, "") == "*" && can(s.Action) && !can(s.Condition)
+      ])
+    ])
+    error_message = "A workload must be able to call a listed model."
+  }
+}
+
+run "cost" {
+  command = apply
+
+  assert {
+    condition = jsondecode(aws_iam_role.cost.assume_role_policy) == {
+      Version = "2012-10-17"
+      Statement = [{
+        Effect    = "Allow"
+        Principal = { Federated = "arn:aws:iam::111122223333:oidc-provider/token.actions.githubusercontent.com" }
+        Action    = "sts:AssumeRoleWithWebIdentity"
+        Condition = { StringEquals = {
+          "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+          "token.actions.githubusercontent.com:sub" = var.cost_subject
+          "token.actions.githubusercontent.com:ref" = "refs/heads/main"
+        } }
+      }]
+    }
+    error_message = "The cost role must trust one literal subject, of cloud-labs, in an environment of its own, on main."
+  }
+
+  assert {
+    condition     = aws_iam_role.cost.name == "gha-cloud-labs-cost" && aws_iam_role.cost.path == "/github-actions/" && aws_iam_role.cost.max_session_duration == 3600
+    error_message = "The cost role must lie where the other roles are protected, and end after an hour."
+  }
+
+  assert {
+    condition = jsondecode(aws_iam_role_policy.cost.policy) == {
+      Version = "2012-10-17"
+      Statement = [
+        { Sid = "ReadCosts", Effect = "Allow", Action = ["ce:GetCostAndUsage"], Resource = "*" },
+        { Sid = "NothingElse", Effect = "Deny", NotAction = ["ce:GetCostAndUsage"], Resource = "*" },
+      ]
+    }
+    error_message = "The cost role may ask for costs, and everything else is denied."
+  }
+
+  assert {
+    condition = (
+      aws_iam_role_policy.cost.role == "gha-cloud-labs-cost"
+      && !contains([for a in aws_iam_role_policy_attachment.ci : a.role], "gha-cloud-labs-cost")
+      && !contains([for p in aws_iam_role_policy.state : p.role], "gha-cloud-labs-cost")
+      && !contains(keys(aws_iam_role.ci), "cloud-labs/cost")
+    )
+    error_message = "The cost role must be no tier: no managed policy and no right to any state."
+  }
+
+  # The list that every tier's rights are made from must not know it.
+  assert {
+    condition     = length(local.identities) == 15 && toset([for id in local.identities : id.tier]) == toset(["plan", "apply", "destroy"])
+    error_message = "subjects.json has three tiers. The cost identity stands in cost.json."
+  }
+
+  assert {
+    condition     = jsondecode(file("../cost.json")) == { cloud-labs = { cost = var.cost_subject } } && contains(output.trusted_subjects, var.cost_subject) && length(output.trusted_subjects) == 16
+    error_message = "cost.json holds one subject, and the account trusts that one and the 15."
   }
 }
 
@@ -277,7 +438,7 @@ run "github_secrets" {
     condition = output.github_secrets == {
       cloud = "aws"
       repos = {
-        for repo, id in var.repo_ids : repo => {
+        for repo, id in var.repo_ids : repo => merge({
           repository = {
             AWS_ACCOUNT_ID            = "111122223333"
             AWS_ROLE_ARN              = aws_iam_role.ci["${repo}/plan"].arn
@@ -286,15 +447,15 @@ run "github_secrets" {
           }
           production      = { AWS_ROLE_ARN = aws_iam_role.ci["${repo}/apply"].arn }
           nightly-destroy = { AWS_ROLE_ARN = aws_iam_role.ci["${repo}/destroy"].arn }
-        }
+        }, { for name in ["cost"] : name => { AWS_ROLE_ARN = aws_iam_role.cost.arn } if repo == "cloud-labs" })
       }
     }
-    error_message = "Each environment must get its own tier's role, and other jobs the plan role."
+    error_message = "Each environment must get its own role, other jobs the plan role, and only cloud-labs the cost role."
   }
 
   assert {
-    condition     = length(distinct([for role in aws_iam_role.ci : role.arn])) == 15
-    error_message = "The comparison above needs 15 different roles."
+    condition     = length(distinct(concat([for role in aws_iam_role.ci : role.arn], [aws_iam_role.cost.arn]))) == 16
+    error_message = "The comparison above needs 16 different roles."
   }
 }
 

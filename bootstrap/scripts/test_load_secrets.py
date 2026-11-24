@@ -36,6 +36,7 @@ def aws():
                 },
                 "production": {"AWS_ROLE_ARN": role(repo, "apply")},
                 "nightly-destroy": {"AWS_ROLE_ARN": role(repo, "destroy")},
+                **({"cost": {"AWS_ROLE_ARN": role(repo, "cost")}} if repo == "cloud-labs" else {}),
             }
             for repo in loader.REPOS
         },
@@ -56,6 +57,7 @@ def azure():
                 },
                 "production": {"AZURE_CLIENT_ID": guid(next(numbers))},
                 "nightly-destroy": {"AZURE_CLIENT_ID": guid(next(numbers))},
+                **({"cost": {"AZURE_CLIENT_ID": guid(next(numbers))}} if repo == "cloud-labs" else {}),
             }
             for repo in loader.REPOS
         },
@@ -75,6 +77,7 @@ def gcp():
                 },
                 "production": {},
                 "nightly-destroy": {},
+                **({"cost": {"GCP_COST_PROJECT_ID": "example-bootstrap-1"}} if repo == "cloud-labs" else {}),
             }
             for repo in loader.REPOS
         },
@@ -134,11 +137,18 @@ class Load(unittest.TestCase):
 
     def test_counts(self):
         self.load(aws())
-        self.assertEqual(len(self.gh.stored), 30)
+        self.assertEqual(len(self.gh.stored), 31)
         self.load(azure())
-        self.assertEqual(len(self.gh.stored), 30)
+        self.assertEqual(len(self.gh.stored), 31)
         self.load(gcp())
-        self.assertEqual(len(self.gh.stored), 20)
+        self.assertEqual(len(self.gh.stored), 21)
+
+    def test_the_cost_identity_is_only_for_one_repo(self):
+        for make, name in ((aws, "AWS_ROLE_ARN"), (azure, "AZURE_CLIENT_ID"), (gcp, "GCP_COST_PROJECT_ID")):
+            self.load(make())
+            self.assertEqual([key for key in self.gh.stored if key[1] not in TIERS], [("oplf-svg/cloud-labs", "cost", name)])
+            self.assertIn(f"  cost             cost     {name} (only in cloud-labs)\n", self.out)
+            self.assertIn("cost 1", next(line for line in self.out.splitlines() if line.startswith("  cloud-labs ")))
 
     def test_survives_a_terminal_copy(self):
         for text in (
@@ -148,7 +158,7 @@ class Load(unittest.TestCase):
         ):
             with self.subTest(text[:20]):
                 self.assertEqual(self.load(text), 0)
-                self.assertEqual(len(self.gh.stored), 30)
+                self.assertEqual(len(self.gh.stored), 31)
 
     def test_reads_a_file(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -197,6 +207,15 @@ class Load(unittest.TestCase):
             "not text": edit(aws, lambda r: r[repo]["repository"].update(AWS_ACCOUNT_ID=111122223333)),
             "apply role given to plan": edit(aws, lambda r: r[repo]["repository"].update(AWS_ROLE_ARN=r[repo]["production"]["AWS_ROLE_ARN"])),
             "another repo's role": edit(aws, lambda r: r[repo]["production"].update(AWS_ROLE_ARN=r[loader.REPOS[1]]["production"]["AWS_ROLE_ARN"])),
+            "no cost identity": edit(aws, lambda r: r["cloud-labs"].pop("cost")),
+            "a cost identity for another repo": edit(aws, lambda r: r["webhook-platform"].update(cost=r["cloud-labs"]["cost"])),
+            "apply role given to cost": edit(aws, lambda r: r["cloud-labs"]["cost"].update(AWS_ROLE_ARN=r["cloud-labs"]["production"]["AWS_ROLE_ARN"])),
+            "cost role given to plan": edit(aws, lambda r: r["cloud-labs"]["repository"].update(AWS_ROLE_ARN=r["cloud-labs"]["cost"]["AWS_ROLE_ARN"])),
+            "apply identity given to cost": edit(azure, lambda r: r["cloud-labs"]["cost"].update(AZURE_CLIENT_ID=r["cloud-labs"]["production"]["AZURE_CLIENT_ID"])),
+            "the costs where the repos deploy": edit(gcp, lambda r: r["cloud-labs"]["cost"].update(GCP_COST_PROJECT_ID="example-project-1")),
+            "the place of the costs in every job": edit(gcp, lambda r: r["cloud-labs"]["repository"].update(GCP_COST_PROJECT_ID="example-bootstrap-1")),
+            "two roles swapped": edit(aws, lambda r: r[repo].update({"production": r[repo]["nightly-destroy"], "nightly-destroy": r[repo]["production"]})),
+            "the roles of costs and apply swapped": edit(aws, lambda r: r["cloud-labs"].update({"production": r["cloud-labs"]["cost"], "cost": r["cloud-labs"]["production"]})),
             "two accounts": edit(aws, lambda r: r[repo]["repository"].update(AWS_ACCOUNT_ID="444455556666")),
             "roles of another account": edit(aws, lambda r: [s["repository"].update(AWS_ACCOUNT_ID="444455556666") for s in r.values()]),
             "one identity twice": edit(azure, lambda r: r[repo]["production"].update(AZURE_CLIENT_ID=r[repo]["repository"]["AZURE_CLIENT_ID"])),

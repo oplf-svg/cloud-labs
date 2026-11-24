@@ -79,6 +79,36 @@ locals {
     "Microsoft.Subscription/enable/action",
   ]
 
+  # Models are paid by the call, and on Azure one can only be called where somebody has set it up. That is for a person,
+  # and so is accepting what is sold on Marketplace. Azure's own agents, next to containers, choose a model themselves.
+  no_models = [
+    "Microsoft.App/agents/*",
+    "Microsoft.App/agentspaces/*",
+    "Microsoft.CognitiveServices/*/action",
+    "Microsoft.CognitiveServices/*/write",
+    "Microsoft.MachineLearningServices/*/action",
+    "Microsoft.MachineLearningServices/*/write",
+    "Microsoft.Marketplace/*",
+    "Microsoft.MarketplaceOrdering/*",
+  ]
+
+  # What a pipeline may register, and so use at all. Some providers sell models by the token, and nobody can know all of
+  # them, so this is a list of what is needed.
+  registrable = [
+    "Microsoft.AlertsManagement",
+    "Microsoft.App",
+    "Microsoft.Compute",
+    "Microsoft.ContainerService",
+    "Microsoft.DBforPostgreSQL",
+    "Microsoft.EventHub",
+    "Microsoft.Insights",
+    "Microsoft.ManagedIdentity",
+    "Microsoft.Network",
+    "Microsoft.OperationalInsights",
+    "Microsoft.Storage",
+    "Microsoft.Web",
+  ]
+
   # The only roles a pipeline may grant or revoke, and only for service principals. None of
   # them can assign roles. The pipelines' own roles are not listed, so they cannot be removed.
   grantable_roles = {
@@ -160,7 +190,7 @@ resource "azurerm_role_definition" "apply" {
 
   permissions {
     actions     = ["*"]
-    not_actions = concat(local.not_contributor, ["Microsoft.Resources/subscriptions/resourceGroups/delete"])
+    not_actions = concat(local.not_contributor, local.no_models, ["Microsoft.Resources/subscriptions/resourceGroups/delete"])
   }
 }
 
@@ -191,9 +221,29 @@ resource "azurerm_role_definition" "register" {
   assignable_scopes = [local.subscription]
 
   permissions {
-    actions     = ["*/register/action", "Microsoft.Resources/subscriptions/providers/read"]
+    actions     = concat([for provider in local.registrable : "${provider}/register/action"], ["Microsoft.Resources/subscriptions/providers/read"])
     not_actions = ["Microsoft.Features/*"]
   }
+}
+
+# A second opinion for the night run of cloud-labs: every other identity only sees the group of its own repo.
+resource "azurerm_role_definition" "census" {
+  name              = "GitHub Actions census"
+  description       = "Sees which resource groups there are. Only for the night run of cloud-labs."
+  scope             = local.subscription
+  assignable_scopes = [local.subscription]
+
+  permissions {
+    actions     = ["Microsoft.Resources/subscriptions/resourceGroups/read"]
+    not_actions = []
+  }
+}
+
+resource "azurerm_role_assignment" "census" {
+  scope              = local.subscription
+  role_definition_id = azurerm_role_definition.census.role_definition_resource_id
+  principal_id       = azurerm_user_assigned_identity.ci["cloud-labs/destroy"].principal_id
+  principal_type     = "ServicePrincipal"
 }
 
 resource "azurerm_role_assignment" "plan" {

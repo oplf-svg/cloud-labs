@@ -15,7 +15,7 @@ import check_sign_in as checks
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 REPO, OTHER = "cloud-labs", "webhook-platform"
-SUBJECT = "repo:oplf-svg@228823995/cloud-labs@1469385611:environment:plan"
+SUBJECT = "repo:oplf-svg@228823995/cloud-labs@1469385611:environment:plan:ref:refs/heads/main"
 
 ACCOUNT, BUCKET = "111122223333", "tfstate-0a1b2c3d"
 ROLES = f"arn:aws:iam::{ACCOUNT}:role/github-actions"
@@ -70,6 +70,15 @@ def refuse(code):
     return 254, "", f"aws: [ERROR]: An error occurred ({code}) when calling it: {ROLES} may not use {BUCKET} in {ACCOUNT}"
 
 
+RULES = {"workload-boundary": {"Sid": "the boundary"}, "guardrails": {"Sid": "the guardrails"}}
+MODEL = "anthropic.claude-haiku-5-5"
+LISTED = [f"arn:aws:bedrock:eu-central-1::foundation-model/{MODEL}", f"arn:aws:bedrock:eu-west-2:{ACCOUNT}:inference-profile/eu.{MODEL}"]
+
+
+def decide(*decisions):
+    return 0, json.dumps({"EvaluationResults": [{"EvalActionName": "x", "EvalDecision": one, "EvalResourceName": ROLES} for one in decisions]}), ""
+
+
 class FakeAws:
     """Answers as AWS should. `changes` maps part of a command to another answer."""
 
@@ -90,6 +99,13 @@ class FakeAws:
             return 0, "{}", ""
         if "create-vpc" in line:
             return refuse("UnauthorizedOperation")
+        if "get-policy " in line:
+            return 0, json.dumps({"Policy": {"DefaultVersionId": "v3", "Arn": ROLES}}), ""
+        if "get-policy-version" in line:
+            assert "--version-id v3 " in line
+            return 0, json.dumps({"PolicyVersion": {"Document": RULES[re.search(r"policy/github-actions/(\S+)", line).group(1)]}}), ""
+        if "simulate-custom-policy" in line:
+            return self.simulate(line)
         if "list-objects-v2" in line:
             prefix = re.search(r"--prefix (\S+)", line).group(1)
             found = [{"Key": name} for name in self.files if name.startswith(prefix)]
@@ -100,6 +116,17 @@ class FakeAws:
             own = key.startswith(f"{self.repo}/")
             return refuse("NoSuchKey") if key not in self.files else (0, "{}", "") if own else refuse("AccessDenied")
         return refuse("AccessDenied")
+
+    def simulate(self, line):
+        policies = [json.loads(one) for one in json.loads(re.search(r"--policy-input-list (\[.*?\])(?: --|$)", line).group(1))]
+        boundary = re.search(r"--permissions-boundary-policy-input-list (\[.*?\])(?: --|$)", line)
+        assert policies[0] == checks.EVERYTHING
+        actions, resource = re.search(r"--action-names (.*) --resource-arns (\S+)", line).groups()
+        denied = policies[1:] == [RULES["guardrails"]]
+        if boundary:
+            assert [json.loads(one) for one in json.loads(boundary.group(1))] == [RULES["workload-boundary"]]
+            denied = resource not in LISTED or not set(actions.split()) <= set(checks.CALL_MODEL)
+        return decide(*["explicitDeny" if denied else "allowed"] * len(actions.split()))
 
     def __call__(self, command, env, **options):
         self.commands.append((command, env))
@@ -223,8 +250,53 @@ class Aws(Base):
                 "ok   read the state of webhook-platform: nothing there",
                 "ok   read the state of the bootstrap: denied",
                 "ok   write its own state: denied",
+                "ok   call claude-haiku-5-5 as a workload: allowed",
+                "ok   call another model as a workload: denied",
+                "ok   use models in another way as a workload: denied",
+                "ok   use a model as a pipeline: denied",
             ],
         )
+        self.assert_private(output)
+
+    def test_every_model_in_the_list_and_none_besides(self):
+        for resource in LISTED:
+            result = run("aws", FakeAws({f"--resource-arns {resource}": decide("explicitDeny", "explicitDeny")}))
+            self.assert_fails_only(result, "FAIL call claude-haiku-5-5 as a workload: not always the same, should be allowed")
+        for resource in checks.UNLISTED:
+            resource = resource.format(region="eu-west-2", account=ACCOUNT)
+            result = run("aws", FakeAws({f"--resource-arns {resource}": decide("allowed", "allowed")}))
+            self.assert_fails_only(result, "FAIL call another model as a workload: not always the same, should be denied")
+            # What must never be listed is not.
+            name = resource.rpartition("/")[2]
+            self.assertNotIn(name, [value for model in checks.MODELS.values() for value in (model["aws"]["model"], model["aws"]["profile"])])
+        # One rule that leaves a gap is enough.
+        for number, action in enumerate(checks.OTHER_MODEL_WORK):
+            answers = ["explicitDeny"] * len(checks.OTHER_MODEL_WORK)
+            answers[number] = "allowed"
+            result = run("aws", FakeAws({" ".join(["--action-names", *checks.OTHER_MODEL_WORK, "--resource-arns"]): decide(*answers)}))
+            self.assert_fails_only(result, "FAIL use models in another way as a workload: not always the same, should be denied")
+        everything = " ".join([*checks.CALL_MODEL, *checks.OTHER_MODEL_WORK])
+        result = run("aws", FakeAws({everything: decide(*["allowed"] * 6)}))
+        self.assert_fails_only(result, "FAIL use a model as a pipeline: allowed, should be denied")
+
+    def test_only_a_rule_that_denies_is_a_denial(self):
+        everything = " ".join([*checks.CALL_MODEL, *checks.OTHER_MODEL_WORK])
+        cases = (
+            (decide(*["implicitDeny"] * 6), "not allowed, but not denied"),
+            (decide(*["something"] * 6), "no answer"),
+            (decide(*["explicitDeny"] * 5), "no answer"),
+            (decide(), "no answer"),
+            (refuse("Throttling"), "Throttling"),
+            (refuse("InvalidInput"), "InvalidInput"),
+        )
+        for reply, shown in cases:
+            result = run("aws", FakeAws({everything: reply}))
+            self.assert_fails_only(result, f"FAIL use a model as a pipeline: {shown}, should be denied")
+
+    def test_rules_that_cannot_be_read_deny_nothing(self):
+        status, output = run("aws", FakeAws({"policy/github-actions/workload-boundary": refuse("AccessDenied"), "simulate-custom-policy": decide("allowed", "allowed")}))
+        self.assertEqual(status, 1)
+        self.assertIn("FAIL call another model as a workload: allowed, should be denied", output)
         self.assert_private(output)
 
     def test_opens_a_file_as_soon_as_there_is_one(self):
@@ -312,7 +384,7 @@ class Aws(Base):
         fake = FakeAws(files=STATES)
         run("aws", fake)
         for command, _ in fake.commands:
-            reads = command[2].startswith(("assume-role-with-web-identity", "describe-", "get-", "list-"))
+            reads = command[2].startswith(("assume-role-with-web-identity", "describe-", "get-", "list-", "simulate-"))
             self.assertTrue(reads or "--dry-run" in command or "--if-match" in command, command)
 
 
@@ -598,10 +670,13 @@ class Preparation(Base):
     def test_another_subject(self):
         for sent, shown in (
             # What a pull request's job has, and a job on main without an environment.
-            (SUBJECT.replace("environment:plan", "pull_request"), SUBJECT.replace("environment:plan", "pull_request")),
-            (SUBJECT.replace("environment:plan", "ref:refs/heads/main"), SUBJECT.replace("environment:plan", "ref:refs/heads/main")),
+            (SUBJECT.replace("environment:plan:ref:refs/heads/main", "pull_request"), SUBJECT.replace("environment:plan:ref:refs/heads/main", "pull_request")),
+            (SUBJECT.replace("environment:plan:", ""), SUBJECT.replace("environment:plan:", "")),
+            # The right environment, but not on main, and what GitHub writes if the repo's subject template is lost.
+            (SUBJECT.replace("refs/heads/main", "refs/pull/9/merge"), SUBJECT.replace("refs/heads/main", "refs/pull/9/merge")),
+            (SUBJECT.removesuffix(":ref:refs/heads/main"), SUBJECT.removesuffix(":ref:refs/heads/main")),
             (checks.SUBJECTS[REPO]["apply"], checks.SUBJECTS[REPO]["apply"]),
-            ("repo:oplf-svg/cloud-labs:environment:plan", "repo:oplf-svg/cloud-labs:environment:plan"),
+            ("repo:oplf-svg/cloud-labs:environment:plan:ref:refs/heads/main", "repo:oplf-svg/cloud-labs:environment:plan:ref:refs/heads/main"),
             ("repo:x:ref:refs/heads/a b\n::add", "repo:x:ref:refs/heads/a?b?::add"),
         ):
             message = f"GitHub's subject is {shown}, not the one in subjects.json."

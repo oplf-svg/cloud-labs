@@ -100,6 +100,7 @@ resource "azurerm_management_lock" "bootstrap" {
 
   depends_on = [
     azurerm_federated_identity_credential.ci,
+    azurerm_federated_identity_credential.cost,
     azurerm_role_assignment.operator,
     azurerm_role_assignment.state,
     azurerm_storage_management_policy.state,

@@ -14,8 +14,8 @@ import time
 import unittest
 
 BOOTSTRAP = pathlib.Path(__file__).resolve().parent.parent
-EXPECTED = {"aws": 104, "azure": 91, "gcp": 45}
-SUBJECTS = [s for tiers in json.loads((BOOTSTRAP / "subjects.json").read_text()).values() for s in tiers.values()]
+EXPECTED = {"aws": 106, "azure": 97, "gcp": 59}
+SUBJECTS = [s for file in ("subjects.json", "cost.json") for some in json.loads((BOOTSTRAP / file).read_text()).values() for s in some.values()]
 
 TERRAFORM = r"""#!/usr/bin/env python3
 import json, os, pathlib, sys
@@ -51,7 +51,7 @@ elif args[0] == "apply":
 elif args[0] == "state":
     print("\n".join(f"r{i}" for i in range(conf.get("arrived", state()))))
 elif args[0] == "output":
-    print(json.dumps({"cloud": conf["cloud"], "repos": {}}) if "-json" in args else "terraform {}")
+    print(json.dumps({"cloud": conf["cloud"], "repos": conf.get("repos", {})}) if "-json" in args else "terraform {}")
 """
 
 CLOUD = r"""#!/usr/bin/env python3
@@ -82,7 +82,15 @@ elif tool == "az":
 elif tool == "gcloud":
     if "billing projects describe" in line: say(conf.get("billing", "True"))
     elif "services enable" in line or "service-accounts describe" in line: pass
-    elif "projects describe" in line: say("210987654321")
+    elif "projects describe" in line: say("123456789012" if "example-bootstrap-1" in line else "210987654321")
+    elif "remove-iam-policy-binding" in line and "principalSet" in line:
+        tried = len((box / "tries").read_text().split()) if (box / "tries").exists() else 0
+        print("tried", file=open(box / "tries", "a"))
+        if tried < conf.get("keeps_roles", 0): sys.exit("PERMISSION_DENIED")
+        with open(box / "lost", "a") as lost: print(args[args.index("--condition=None") + 1].removeprefix("--role="), file=lost)
+    elif "get-iam-policy" in line and "--format=json" in line:
+        lost = (box / "lost").read_text().split() if (box / "lost").exists() else []
+        say(json.dumps({"bindings": [binding for binding in conf.get("bindings", []) if binding["role"] not in lost], "etag": "x", "version": 3}))
     elif "remove-iam-policy-binding" in line: (box / "stripped").write_text("yes")
     elif "get-iam-policy" in line:
         say("user:owner@example.com\nserviceAccount:210987654321@cloudservices.gserviceaccount.com")
@@ -207,7 +215,7 @@ class Run(unittest.TestCase):
             self.assertEqual((self.box / "remote").read_text(), str(EXPECTED[cloud]))
             for leftover in ("terraform.tfstate", "terraform.tfstate.backup", "tfplan"):
                 self.assertFalse((self.stack / leftover).exists(), leftover)
-            self.assertIn("15 subjects match", self.out)
+            self.assertIn("16 subjects match", self.out)
             self.assertIn('{"cloud": "' + cloud, self.out)
             self.assertNotRegex(self.log(), r"terraform (destroy|apply -auto)")
             for line in self.log().splitlines():
@@ -227,7 +235,7 @@ class Run(unittest.TestCase):
             with self.subTest(cloud):
                 self.setUp()
                 self.assertEqual(self.type(cloud, early, *answers), 1, self.out)
-                self.assertIn("Nothing was changed", self.out)
+                self.assertIn("Nothing was changed" if cloud == "aws" else "Terraform has changed nothing", self.out)
                 self.assertFalse(self.applied())
 
     def test_what_is_typed_early_does_not_spoil_the_answer(self):
@@ -297,7 +305,7 @@ class Run(unittest.TestCase):
             self.assertEqual(self.go(cloud, bucket="tfstate-0a1b2c3d", answer="yes" if cloud == "gcp" else "no"), 0, self.out)
             self.assertFalse(self.applied())
             self.assertIn("tfstate-0a1b2c3d", (self.stack / "backend.tf").read_text())
-            self.assertIn("15 subjects match", self.out)
+            self.assertIn("16 subjects match", self.out)
 
     def test_run_again_for_a_new_output(self):
         for cloud in self.each_cloud():
@@ -305,37 +313,126 @@ class Run(unittest.TestCase):
             self.assertEqual(self.go(cloud, bucket="tfstate-0a1b2c3d", outputs_only=True), 0, self.out)
             self.assertTrue(self.applied())
 
-    def test_carries_out_a_later_change(self):
-        # As when plan came to trust another subject: everything is there already, and some of it changes in place.
-        before = [subject.replace(":environment:plan", ":pull_request") for subject in SUBJECTS]
-        self.assertEqual(len(set(before) - set(SUBJECTS)), 5)
+    def test_the_value_for_the_costs_stands_by_itself(self):
+        names = {"aws": "AWS_ROLE_ARN", "azure": "AZURE_CLIENT_ID", "gcp": "GCP_COST_PROJECT_ID"}
         for cloud in self.each_cloud():
             (self.box / "remote").write_text(str(EXPECTED[cloud]))
-            later = {"bucket": "tfstate-0a1b2c3d", "subjects_before": before, "update": 5}
+            repos = {"webhook-platform": {"production": {names[cloud]: "another"}}, "cloud-labs": {"production": {names[cloud]: "another"}, "cost": {names[cloud]: "the-one"}}}
+            self.assertEqual(self.go(cloud, bucket="tfstate-0a1b2c3d", outputs_only=True, repos=repos), 0, self.out)
+            self.assertIn(f"environment cost:\n\n  {names[cloud]} = the-one\n", self.out)
+            self.assertEqual(self.out.count("another"), 2)
+            self.assertEqual(self.go(cloud, bucket="tfstate-0a1b2c3d", outputs_only=True, repos={"cloud-labs": {}}), 0, self.out)
+            self.assertNotIn("environment cost", self.out)
+            # On a Mac too, and also the second time, when nothing is new: the window may have been closed too early.
+            for conf in ({"total": EXPECTED[cloud] + 2}, {}):
+                (self.box / "applied").unlink(missing_ok=True)
+                self.assertEqual(self.there(cloud, env={"RUN_RESULTS": str(self.box / "results")}, repos=repos, **conf), 0, self.out)
+                self.assertIn(f"environment cost:\n\n  {names[cloud]} = the-one\n", self.out)
+                self.assertEqual("Nothing new" in self.out, not conf)
+                self.assertEqual(self.out.count("another"), 0 if not conf else 2)
+                self.assertNotIn("the-one", "".join(self.result()))
+
+    def test_carries_out_a_later_change(self):
+        # As when plan came to trust another subject: everything is there already, and some of it changes in place.
+        before = [subject.removesuffix(":ref:refs/heads/main") for subject in SUBJECTS if ":environment:cost" not in subject]
+        self.assertEqual(len(set(before) - set(SUBJECTS)), 15)
+        for cloud in self.each_cloud():
+            (self.box / "remote").write_text(str(EXPECTED[cloud]))
+            later = {"bucket": "tfstate-0a1b2c3d", "subjects_before": before, "update": 15}
             self.assertEqual(self.go(cloud, answer="no", **later), 1)
             self.assertFalse(self.applied())
             self.assertEqual(self.go(cloud, **later), 0, self.out)
-            self.assertIn("This will create 0 and change 5 resources, and delete none, in:", self.out)
+            self.assertIn("This will create 0 and change 15 resources, and delete none, in:", self.out)
             self.assertTrue(self.applied())
-            self.assertIn("15 subjects match", self.out)
+            self.assertIn("16 subjects match", self.out)
             self.assertEqual((self.box / "remote").read_text(), str(EXPECTED[cloud]))
 
     def test_a_replacement_stops_a_later_change(self):
         for cloud in self.each_cloud():
             (self.box / "remote").write_text(str(EXPECTED[cloud]))
             self.assertEqual(self.go(cloud, bucket="tfstate-0a1b2c3d", delete=5), 1)
-            self.assertIn("The plan would delete or replace 5 resource(s). Nothing was changed.", self.out)
+            # On Google, something was changed before the plan.
+            unchanged = "Terraform has changed nothing, but the services are on and the roles stay away." if cloud == "gcp" else "Nothing was changed."
+            self.assertIn(f"STOPPED: The plan would delete or replace 5 resource(s). {unchanged} See the runbook.", self.out)
             self.assertFalse(self.applied())
 
     def test_a_subject_that_is_no_longer_in_the_list_is_not_accepted(self):
-        # What a pull request's job has. Nothing may trust it, not even next to the right ones.
-        old = SUBJECTS[0].partition(":environment:")[0] + ":pull_request"
+        # What a pull request's job has, and what a job in an environment had before the branch was part of it. Nothing may
+        # trust it, not even next to the right ones.
+        for old in (SUBJECTS[0].partition(":environment:")[0] + ":pull_request", SUBJECTS[0].removesuffix(":ref:refs/heads/main")):
+            for cloud in self.each_cloud():
+                (self.box / "remote").write_text(str(EXPECTED[cloud]))
+                for wrong in ({"extra_subjects": [old]}, {"subjects": [old, *SUBJECTS[1:]]}, {"subjects": SUBJECTS[1:]}):
+                    self.assertEqual(self.go(cloud, bucket="tfstate-0a1b2c3d", **wrong), 1)
+                    self.assertIn("differs from subjects.json and cost.json", self.out)
+                    self.assertNotIn("pbpaste", self.out)
+
+    def test_the_cost_identity_is_trusted_too(self):
+        cost = next(subject for subject in SUBJECTS if ":environment:cost" in subject)
         for cloud in self.each_cloud():
             (self.box / "remote").write_text(str(EXPECTED[cloud]))
-            for wrong in ({"extra_subjects": [old]}, {"subjects": [old, *SUBJECTS[1:]]}, {"subjects": SUBJECTS[1:]}):
-                self.assertEqual(self.go(cloud, bucket="tfstate-0a1b2c3d", **wrong), 1)
-                self.assertIn("differs from subjects.json", self.out)
-                self.assertNotIn("pbpaste", self.out)
+            self.assertEqual(self.go(cloud, bucket="tfstate-0a1b2c3d", subjects=[subject for subject in SUBJECTS if subject != cost]), 1)
+            self.assertIn(f"< {cost}", self.out)
+
+    def test_google_gets_the_apis_that_it_needs(self):
+        self.assertEqual(self.go("gcp"), 0, self.out)
+        enabled = [line for line in self.log().splitlines() if "services enable" in line]
+        self.assertEqual(len(enabled), 2)
+        self.assertIn("bigquery.googleapis.com", enabled[0])
+        self.assertTrue(enabled[0].endswith("--project example-bootstrap-1"), enabled[0])
+        listed = json.loads((BOOTSTRAP / "gcp" / "services.json").read_text())["deploy"]
+        self.assertEqual(enabled[1].split(), ["gcloud", "services", "enable", *(f"{name}.googleapis.com" for name in listed), "--project", "example-project-1"])
+
+    def test_google_takes_three_roles_from_apply(self):
+        tiers = "principalSet://iam.googleapis.com/projects/123456789012/locations/global/workloadIdentityPools/github-actions/attribute.tier"
+        three = ("roles/cloudkms.admin", "roles/monitoring.editor", "roles/serviceusage.serviceUsageAdmin")
+        held = [{"role": role, "members": ["user:owner@example.com", f"{tiers}/apply"]} for role in ("roles/run.admin", *three)]
+        removed = [f"gcloud projects remove-iam-policy-binding example-project-1 --condition=None --role={role} --member={tiers}/apply" for role in three]
+
+        def lines():
+            return [line for line in self.log().splitlines() if "remove-iam-policy-binding" in line and "principalSet" in line]
+
+        self.assertEqual(self.go("gcp", bindings=held), 0, self.out)
+        self.assertEqual(lines(), removed)
+        # And Editor from the account that Google makes in the project of the repos.
+        self.assertIn("gcloud projects remove-iam-policy-binding example-project-1 --condition=None --role=roles/editor --member=serviceAccount:210987654321-compute@developer.gserviceaccount.com\n", self.log())
+        # Before the plan, or it would stop at three deletions.
+        self.assertLess(self.log().index(removed[-1]), self.log().index("terraform plan"))
+        # The next time there is nothing to take.
+        (self.box / "log").unlink()
+        self.assertEqual(self.go("gcp", bindings=held, bucket="tfstate-0a1b2c3d"), 0, self.out)
+        self.assertEqual(lines(), [])
+
+    def test_google_does_not_deny_what_was_changed(self):
+        said = "Terraform has changed nothing, but the services are on and the roles stay away."
+        self.assertEqual(self.go("gcp", answer="no"), 1)
+        self.assertIn("STOPPED: Nothing was changed.\n", self.out)
+        self.setUp()
+        self.assertEqual(self.type("gcp", "", "yes\n", "no\n"), 1, self.out)
+        self.assertIn(f"STOPPED: {said}", self.out)
+        self.assertNotIn("Nothing was changed", self.out)
+        self.assertFalse(self.applied())
+
+    def test_google_takes_nothing_from_others(self):
+        tiers = "principalSet://iam.googleapis.com/projects/123456789012/locations/global/workloadIdentityPools/github-actions/attribute.tier"
+        others = [{"role": "roles/monitoring.editor", "members": [f"{tiers}/plan", "user:owner@example.com"]}]
+        others += [{"role": "roles/cloudkms.admin", "members": [f"{tiers}/apply"], "condition": {"title": "x", "expression": "true"}}]
+        for bindings in (others, []):
+            self.setUp()
+            self.assertEqual(self.go("gcp", bindings=bindings), 0, self.out)
+            self.assertNotIn("principalSet", self.log())
+
+    def test_google_keeps_the_roles(self):
+        tiers = "principalSet://iam.googleapis.com/projects/123456789012/locations/global/workloadIdentityPools/github-actions/attribute.tier"
+        held = [{"role": "roles/monitoring.editor", "members": [f"{tiers}/apply"]}]
+        # It may be busy for a moment.
+        self.assertEqual(self.go("gcp", bindings=held, keeps_roles=2), 0, self.out)
+        self.setUp()
+        self.assertEqual(self.go("gcp", bindings=held, keeps_roles=3), 1)
+        self.assertIn("STOPPED: Google did not take roles/monitoring.editor away from apply. Run the same command again.", self.out)
+        self.assertIn("PERMISSION_DENIED", self.out)
+        self.assertNotIn("terraform plan", self.log())
+        self.assertFalse(self.applied())
 
     def test_bucket_without_state(self):
         for cloud in self.each_cloud():
@@ -387,7 +484,7 @@ class Run(unittest.TestCase):
             self.assertEqual(self.there(cloud, **later), 0, self.out)
             self.assertIn("This will create 0 and change 5 resources, and delete none, in:", self.out)
             self.assertTrue(self.applied())
-            self.assertIn("15 subjects match", self.out)
+            self.assertIn("16 subjects match", self.out)
             # GitHub has the ids already, so they are not on the screen.
             self.assertIn("Nothing new", self.out)
             self.assertNotIn('{"cloud": "', self.out)

@@ -6,7 +6,8 @@ Run once, as Owner of both projects, in Cloud Shell. Nothing here needs a key, a
 |---|---|---|---|
 | `terraform apply`, once | 1 workload identity pool and provider | bootstrap project | Free |
 | | 1 Cloud Storage bucket for state: encrypted, versioned, public access blocked | bootstrap project | Under 0.05 USD a month |
-| | 4 custom roles, 36 project grants | the project the repos deploy into | Free |
+| | 1 empty BigQuery dataset for Google's billing export, 1 custom role on it | bootstrap project | Free until 10 GB |
+| | 6 custom roles, 41 project grants, 2 views of logs with 1 grant each | the project the repos deploy into | Free |
 
 You need two projects: the one the repos deploy into, and one that holds only the trust and the state. Some of Google's
 own service agents can read every bucket in their project and run code for whoever asks, and a bucket cannot refuse
@@ -69,8 +70,8 @@ for doing it by hand.
 5. Turn on the APIs, and get Terraform.
 
    ```bash
-   gcloud services enable cloudresourcemanager.googleapis.com iam.googleapis.com storage.googleapis.com sts.googleapis.com --project "$TF_VAR_bootstrap_project_id"
-   gcloud services enable cloudresourcemanager.googleapis.com compute.googleapis.com iam.googleapis.com serviceusage.googleapis.com --project "$TF_VAR_project_id"
+   gcloud services enable bigquery.googleapis.com cloudresourcemanager.googleapis.com iam.googleapis.com storage.googleapis.com sts.googleapis.com --project "$TF_VAR_bootstrap_project_id"
+   gcloud services enable $(jq -r '.deploy[] + ".googleapis.com"' services.json) --project "$TF_VAR_project_id"
    ```
 
    ```bash
@@ -94,7 +95,7 @@ for doing it by hand.
    gcloud compute networks delete default --project "$TF_VAR_project_id"
    ```
 
-7. Plan. It must end with `Plan: 45 to add, 0 to change, 0 to destroy.` If an API says it is not enabled yet, wait a
+7. Plan. It must end with `Plan: 59 to add, 0 to change, 0 to destroy.` If an API says it is not enabled yet, wait a
    minute and try again.
 
    ```bash
@@ -111,7 +112,7 @@ for doing it by hand.
    minute and repeat from `terraform plan -out=tfplan` in step 7. What exists already is not created twice, so the
    number is smaller.
 
-9. Check that the state is in the bucket, then remove the local copy. The count must be 47.
+9. Check that the state is in the bucket, then remove the local copy. The count must be 52.
 
    ```bash
    terraform state list | wc -l
@@ -125,10 +126,10 @@ for doing it by hand.
 
 ## Check it
 
-Every subject Google Cloud trusts, against the list in this repo:
+Every subject Google Cloud trusts, against the two lists in this repo:
 
 ```bash
-diff <(jq -r '.[][]' ../subjects.json | sort) <(gcloud iam workload-identity-pools providers describe github --workload-identity-pool=github-actions --location=global --project "$TF_VAR_bootstrap_project_id" --format='value(attributeCondition)' | grep -o 'repo:[^"]*' | sort) && echo "15 subjects match"
+diff <(jq -r '.[][]' ../subjects.json ../cost.json | sort) <(gcloud iam workload-identity-pools providers describe github --workload-identity-pool=github-actions --location=global --project "$TF_VAR_bootstrap_project_id" --format='value(attributeCondition)' | grep -o 'repo:[^"]*' | sort) && echo "16 subjects match"
 ```
 
 The bucket: public access prevention `enforced`, uniform access and versioning `true`. In the access list, the only
@@ -163,6 +164,14 @@ pbpaste | python3 bootstrap/scripts/load_secrets.py
 
 It checks every value, lists the names it will set, never shows a value, and asks before it writes.
 
+## Costs
+
+Google writes costs only where you tell it to, and fills in no past for a dataset in London. So switch it on before the
+first stack: in the console, **Billing**, **Billing export**, **BigQuery export**, **Standard usage cost**, with the
+bootstrap project and the dataset `billing_export`. Google makes its own export account an owner of the dataset. Leave
+that there, or the export stops and nobody is told. The first rows take some hours. They hold the costs of every project
+on the billing account.
+
 ## Run it again later
 
 `run.sh` carries out what has changed here since, for example in [subjects.json](../subjects.json). It shows the plan,
@@ -186,12 +195,14 @@ Destroy every repo's own stacks first. Once the pool is gone, GitHub cannot.
 
 1. Do "Run it again later", so that Terraform has the state.
 
-2. Bring the state back to Cloud Shell and allow the bucket to be deleted. The last line leaves the bucket's access list
-   in place until the bucket itself goes, because it is what gives you access to the contents.
+2. Switch the billing export off in the console and delete the tables in the dataset `billing_export`: Terraform deletes
+   it only when it is empty. Then bring the state back to Cloud Shell and allow the bucket and the dataset to be
+   deleted. The last line leaves the bucket's access list in place until the bucket itself goes, because it is what
+   gives you access to the contents.
 
    ```bash
    rm backend.tf && terraform init -lockfile=readonly -migrate-state -force-copy
-   sed -i 's/prevent_destroy = true/prevent_destroy = false/' state.tf
+   sed -i 's/prevent_destroy = true/prevent_destroy = false/' cost.tf state.tf
    terraform apply -var allow_state_deletion=true
    terraform state rm google_storage_bucket_iam_policy.state
    ```

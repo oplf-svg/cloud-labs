@@ -4,7 +4,7 @@ Run once, as an administrator, in CloudShell. Nothing here needs a key, and GitH
 
 | You run | It creates | Cost |
 |---|---|---|
-| `terraform apply`, once | 1 OIDC provider, 15 roles, 5 policies and their attachments | Free |
+| `terraform apply`, once | 1 OIDC provider, 16 roles, 5 policies and their attachments | Free |
 | | 1 S3 bucket for state: encrypted, versioned, public access blocked | Under 0.05 USD a month |
 
 ## Which account
@@ -69,7 +69,7 @@ for doing it by hand.
    aws iam list-open-id-connect-providers --output text | grep token.actions.githubusercontent.com
    ```
 
-6. Plan. It must end with `Plan: 104 to add, 0 to change, 0 to destroy.`
+6. Plan. It must end with `Plan: 106 to add, 0 to change, 0 to destroy.`
 
    ```bash
    terraform init -lockfile=readonly && terraform plan -out=tfplan
@@ -84,7 +84,7 @@ for doing it by hand.
    If the apply stops halfway, keep the shell open, fix the cause and repeat from `terraform plan -out=tfplan` in step
    6. What exists already is not created twice, so the number is smaller.
 
-8. Check that the state is in the bucket, then remove the local copy. The count must be 104.
+8. Check that the state is in the bucket, then remove the local copy. The count must be 106.
 
    ```bash
    terraform state list | wc -l
@@ -98,10 +98,10 @@ for doing it by hand.
 
 ## Check it
 
-Every subject that any role in the account trusts, against the list in this repo:
+Every subject that any role in the account trusts, against the two lists in this repo:
 
 ```bash
-diff <(jq -r '.[][]' ../subjects.json | sort) <(aws iam list-roles --output json | jq -r '.Roles[].AssumeRolePolicyDocument.Statement | if type == "array" then .[] else . end | select(tostring | contains("token.actions.githubusercontent.com")) | .Condition.StringEquals["token.actions.githubusercontent.com:sub"] // "a role without one exact subject"' | sort) && echo "15 subjects match"
+diff <(jq -r '.[][]' ../subjects.json ../cost.json | sort) <(aws iam list-roles --output json | jq -r '.Roles[].AssumeRolePolicyDocument.Statement | if type == "array" then .[] else . end | select(tostring | contains("token.actions.githubusercontent.com")) | .Condition.StringEquals["token.actions.githubusercontent.com:sub"] // "a role without one exact subject"' | sort) && echo "16 subjects match"
 ```
 
 The bucket: four times `true`, `Enabled`, and `AES256`.
@@ -125,6 +125,13 @@ pbpaste | python3 bootstrap/scripts/load_secrets.py
 ```
 
 It checks every value, lists the names it will set, never shows a value, and asks before it writes.
+
+## Costs
+
+The identity that reads costs needs Cost Explorer. Open it once in the console, in the account that pays: in an
+organization that is the management account, and its settings must let linked accounts see their costs, which is the
+default. The first numbers take about a day. Until then [cost.yml](../../.github/workflows/cost.yml) fails at its first
+question.
 
 ## Run it again later
 

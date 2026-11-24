@@ -24,6 +24,35 @@ mock_provider "azurerm" {
   }
 }
 
+# The cost identity and its role have ids of their own, so that the tests can tell them apart from the others.
+override_resource {
+  target = azurerm_user_assigned_identity.cost
+  values = {
+    id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-github-bootstrap/providers/Microsoft.ManagedIdentity/userAssignedIdentities/cost"
+    principal_id = "00000000-0000-0000-0000-00000000000e"
+  }
+}
+
+override_resource {
+  target = azurerm_role_definition.cost
+  values = { role_definition_resource_id = "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.Authorization/roleDefinitions/00000000-0000-0000-0000-00000000000f" }
+}
+
+# So has the census role, and so has the one identity that may hold it.
+override_resource {
+  target = azurerm_role_definition.census
+  values = { role_definition_resource_id = "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.Authorization/roleDefinitions/00000000-0000-0000-0000-000000000010" }
+}
+
+override_resource {
+  target = azurerm_user_assigned_identity.ci["cloud-labs/destroy"]
+  values = {
+    id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-github-bootstrap/providers/Microsoft.ManagedIdentity/userAssignedIdentities/destroy"
+    principal_id = "00000000-0000-0000-0000-000000000011"
+    client_id    = "00000000-0000-0000-0000-000000000012"
+  }
+}
+
 mock_provider "random" {
   mock_resource "random_id" {
     defaults = { hex = "0a1b2c3d" }
@@ -42,10 +71,11 @@ variables {
     cloud-labs         = 1469385611
   }
   suffixes = {
-    plan    = "environment:plan"
-    apply   = "environment:production"
-    destroy = "environment:nightly-destroy"
+    plan    = "environment:plan:ref:refs/heads/main"
+    apply   = "environment:production:ref:refs/heads/main"
+    destroy = "environment:nightly-destroy:ref:refs/heads/main"
   }
+  cost_subject = "repo:oplf-svg@228823995/cloud-labs@1469385611:environment:cost:ref:refs/heads/main"
 }
 
 run "trust" {
@@ -72,8 +102,8 @@ run "trust" {
   }
 
   assert {
-    condition     = alltrue([for c in azurerm_federated_identity_credential.ci : can(regex(":environment:(plan|production|nightly-destroy)$", c.subject))])
-    error_message = "Only jobs in one of the three environments may be trusted, so never a pull request."
+    condition     = alltrue([for c in azurerm_federated_identity_credential.ci : can(regex(":environment:(plan|production|nightly-destroy):ref:refs/heads/main$", c.subject))])
+    error_message = "Only jobs in one of the three environments and on main may be trusted, so never a pull request."
   }
 
   assert {
@@ -121,7 +151,7 @@ run "permissions" {
 
   assert {
     condition = alltrue([
-      for r in [azurerm_role_definition.plan, azurerm_role_definition.apply, azurerm_role_definition.destroy, azurerm_role_definition.register] : alltrue([
+      for r in [azurerm_role_definition.plan, azurerm_role_definition.apply, azurerm_role_definition.destroy, azurerm_role_definition.register, azurerm_role_definition.cost, azurerm_role_definition.census] : alltrue([
         for a in concat(r.permissions[0].actions, r.permissions[0].not_actions) : length(regexall("[*]", a)) <= 1
       ])
     ])
@@ -172,6 +202,134 @@ run "permissions" {
   }
 }
 
+run "models" {
+  command = apply
+
+  # Names from Microsoft's reference of rights.
+  assert {
+    condition = alltrue([
+      for a in [
+        "Microsoft.App/agents/write", "Microsoft.App/agentspaces/write", "Microsoft.App/agentspaces/join/action",
+        "Microsoft.CognitiveServices/accounts/write", "Microsoft.CognitiveServices/accounts/deployments/write", "Microsoft.CognitiveServices/accounts/listKeys/action", "Microsoft.CognitiveServices/accounts/regenerateKey/action",
+        "Microsoft.MachineLearningServices/workspaces/write", "Microsoft.MachineLearningServices/workspaces/onlineEndpoints/write", "Microsoft.MachineLearningServices/workspaces/listKeys/action",
+        "Microsoft.Marketplace/offerTypes/publishers/offers/plans/agreements/write", "Microsoft.MarketplaceOrdering/agreements/offers/plans/sign/action", "Microsoft.MarketplaceOrdering/offertypes/publishers/offers/plans/agreements/write",
+      ] :
+      anytrue([for n in azurerm_role_definition.apply.permissions[0].not_actions : can(regex("^${replace(replace(n, ".", "[.]"), "*", ".*")}$", a))])
+    ])
+    error_message = "Apply must not set up a model, read its keys or accept terms."
+  }
+
+  # Written out again here on purpose. What is not registered cannot be used, and some providers sell models too.
+  assert {
+    condition = toset(azurerm_role_definition.register.permissions[0].actions) == toset(concat(
+      [for name in ["AlertsManagement", "App", "Compute", "ContainerService", "DBforPostgreSQL", "EventHub", "Insights", "ManagedIdentity", "Network", "OperationalInsights", "Storage", "Web"] : "Microsoft.${name}/register/action"],
+      ["Microsoft.Resources/subscriptions/providers/read"],
+    ))
+    error_message = "Apply may register twelve providers and no other."
+  }
+
+  # No other role lets a pipeline register something: the one for its own group cannot, and neither can those that it may give.
+  assert {
+    condition = alltrue([
+      for r in [azurerm_role_definition.plan, azurerm_role_definition.destroy, azurerm_role_definition.cost, azurerm_role_definition.census] :
+      !anytrue([for a in r.permissions[0].actions : can(regex("register|/action$|^[*]$", a)) && a != "Microsoft.CostManagement/query/action"])
+    ])
+    error_message = "Only apply may register a provider."
+  }
+
+  # And nothing else goes with that.
+  assert {
+    condition = alltrue([
+      for a in ["Microsoft.App/containerApps/write", "Microsoft.App/jobs/write", "Microsoft.App/managedEnvironments/write", "Microsoft.ContainerRegistry/registries/write", "Microsoft.ContainerService/managedClusters/write", "Microsoft.DBforPostgreSQL/flexibleServers/write", "Microsoft.EventHub/namespaces/write", "Microsoft.ManagedIdentity/userAssignedIdentities/write", "Microsoft.Web/staticSites/write"] :
+      !anytrue([for n in azurerm_role_definition.apply.permissions[0].not_actions : can(regex("^${replace(replace(n, ".", "[.]"), "*", ".*")}$", a))])
+    ])
+    error_message = "Apply must still be able to set up containers, databases, clusters and sites."
+  }
+}
+
+run "census" {
+  command = apply
+
+  assert {
+    condition = (
+      azurerm_role_definition.census.permissions[0].actions == tolist(["Microsoft.Resources/subscriptions/resourceGroups/read"])
+      && length(azurerm_role_definition.census.permissions) == 1
+      && try(length(azurerm_role_definition.census.permissions[0].data_actions), 0) == 0
+      && azurerm_role_definition.census.scope == "/subscriptions/00000000-0000-0000-0000-000000000000"
+    )
+    error_message = "The census role may see which resource groups there are, and nothing that is in them."
+  }
+
+  # The subject is written out, so that another identity in that place fails the test.
+  assert {
+    condition = (
+      azurerm_role_assignment.census.scope == "/subscriptions/00000000-0000-0000-0000-000000000000"
+      && azurerm_role_assignment.census.role_definition_id == azurerm_role_definition.census.role_definition_resource_id
+      && [for key, i in azurerm_user_assigned_identity.ci : azurerm_federated_identity_credential.ci[key].subject if i.principal_id == azurerm_role_assignment.census.principal_id] == ["repo:oplf-svg@228823995/cloud-labs@1469385611:environment:nightly-destroy:ref:refs/heads/main"]
+    )
+    error_message = "Only the destroy identity of cloud-labs may see the other resource groups."
+  }
+
+  # Nobody else holds that role, and that identity has nothing else outside its own group.
+  assert {
+    condition = alltrue([
+      for a in concat(values(azurerm_role_assignment.plan), values(azurerm_role_assignment.apply), values(azurerm_role_assignment.apply_grants), values(azurerm_role_assignment.apply_register), values(azurerm_role_assignment.destroy), values(azurerm_role_assignment.state), [azurerm_role_assignment.cost]) :
+      a.role_definition_id != azurerm_role_definition.census.role_definition_resource_id
+      && (a.principal_id != azurerm_role_assignment.census.principal_id || a.scope != azurerm_role_assignment.census.scope)
+    ])
+    error_message = "The census role must be in one assignment only, and its identity in no other one on the subscription."
+  }
+}
+
+run "cost" {
+  command = apply
+
+  assert {
+    condition = (
+      azurerm_federated_identity_credential.cost.subject == var.cost_subject
+      && azurerm_federated_identity_credential.cost.issuer == "https://token.actions.githubusercontent.com"
+      && azurerm_federated_identity_credential.cost.audience == tolist(["api://AzureADTokenExchange"])
+      && azurerm_federated_identity_credential.cost.user_assigned_identity_id == azurerm_user_assigned_identity.cost.id
+    )
+    error_message = "The cost identity must trust one literal subject, of cloud-labs, in an environment of its own, on main."
+  }
+
+  assert {
+    condition     = azurerm_user_assigned_identity.cost.name == "id-gha-cloud-labs-cost" && azurerm_user_assigned_identity.cost.resource_group_name == "rg-github-bootstrap"
+    error_message = "The cost identity must lie where no pipeline has any rights."
+  }
+
+  assert {
+    condition = (
+      toset(azurerm_role_definition.cost.permissions[0].actions) == toset(["Microsoft.CostManagement/query/action", "Microsoft.CostManagement/query/read"])
+      && length(azurerm_role_definition.cost.permissions) == 1
+      && try(length(azurerm_role_definition.cost.permissions[0].data_actions), 0) == 0
+    )
+    error_message = "The cost role may ask what something has cost, and nothing else."
+  }
+
+  # The identity is in one assignment, with that role.
+  assert {
+    condition = (
+      azurerm_role_assignment.cost.scope == "/subscriptions/00000000-0000-0000-0000-000000000000"
+      && azurerm_role_assignment.cost.role_definition_id == azurerm_role_definition.cost.role_definition_resource_id
+      && azurerm_role_assignment.cost.principal_id == azurerm_user_assigned_identity.cost.principal_id
+      && length([
+        for a in concat(values(azurerm_role_assignment.plan), values(azurerm_role_assignment.apply), values(azurerm_role_assignment.apply_grants), values(azurerm_role_assignment.apply_register), values(azurerm_role_assignment.destroy), values(azurerm_role_assignment.state)) :
+        a if a.principal_id == azurerm_user_assigned_identity.cost.principal_id || a.role_definition_id == azurerm_role_definition.cost.role_definition_resource_id
+      ]) == 0
+      && !contains(keys(azurerm_user_assigned_identity.ci), "cloud-labs/cost")
+    )
+    error_message = "The cost identity must have its own role and no other, and no right to any state."
+  }
+
+  # Nothing else may hold the cost role or stand in its place.
+  assert {
+    condition     = jsondecode(file("../cost.json")) == { cloud-labs = { cost = var.cost_subject } } && contains(output.trusted_subjects, var.cost_subject) && length(output.trusted_subjects) == 16
+    error_message = "cost.json holds one subject, and the subscription trusts that one and the 15."
+  }
+}
+
 run "state" {
   command = apply
 
@@ -219,7 +377,7 @@ run "github_secrets" {
     condition = output.github_secrets == {
       cloud = "azure"
       repos = {
-        for repo, id in var.repo_ids : repo => {
+        for repo, id in var.repo_ids : repo => merge({
           repository = {
             AZURE_CLIENT_ID       = azurerm_user_assigned_identity.ci["${repo}/plan"].client_id
             AZURE_STATE_ACCOUNT   = "tfstate0a1b2c3d"
@@ -228,15 +386,15 @@ run "github_secrets" {
           }
           production      = { AZURE_CLIENT_ID = azurerm_user_assigned_identity.ci["${repo}/apply"].client_id }
           nightly-destroy = { AZURE_CLIENT_ID = azurerm_user_assigned_identity.ci["${repo}/destroy"].client_id }
-        }
+        }, { for name in ["cost"] : name => { AZURE_CLIENT_ID = azurerm_user_assigned_identity.cost.client_id } if repo == "cloud-labs" })
       }
     }
-    error_message = "Each environment must get its own tier's identity, and other jobs the plan identity."
+    error_message = "Each environment must get its own identity, other jobs the plan identity, and only cloud-labs the cost identity."
   }
 
   assert {
-    condition     = length(distinct([for identity in azurerm_user_assigned_identity.ci : identity.client_id])) == 15
-    error_message = "The comparison above needs 15 different identities."
+    condition     = length(distinct(concat([for identity in azurerm_user_assigned_identity.ci : identity.client_id], [azurerm_user_assigned_identity.cost.client_id]))) == 16
+    error_message = "The comparison above needs 16 different identities."
   }
 }
 

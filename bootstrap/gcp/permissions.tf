@@ -1,10 +1,13 @@
 locals {
   # Everything in this file is granted on project_id. No pipeline has a project role where the
-  # trust and the state are.
+  # trust, the state and the costs are.
 
   # Deploy rights, service by service. Left out on purpose: the basic roles, roles that can buy
   # commitments (Compute Admin, BigQuery Admin, Vertex AI Admin), roles that can run Cloud Build
-  # as the default service account (Dataflow), and roles that can change the trust or create keys.
+  # as the default service account (Dataflow), roles that can change the trust or create keys, and
+  # roles that can turn services on or off (Monitoring Editor is one). Which ones are on stands in
+  # services.json, and run.sh turns them on: what is off cannot be used, and what is turned off
+  # cannot be asked about.
   apply_roles = [
     "roles/aiplatform.user",
     "roles/apigateway.admin",
@@ -13,7 +16,6 @@ locals {
     "roles/bigquery.jobUser",
     "roles/certificatemanager.editor",
     "roles/cloudfunctions.admin",
-    "roles/cloudkms.admin",
     "roles/cloudscheduler.admin",
     "roles/cloudsql.admin",
     "roles/cloudtasks.admin",
@@ -27,13 +29,16 @@ locals {
     "roles/eventarc.admin",
     "roles/iam.serviceAccountUser",
     "roles/logging.configWriter",
-    "roles/monitoring.editor",
+    "roles/monitoring.alertPolicyEditor",
+    "roles/monitoring.dashboardEditor",
+    "roles/monitoring.notificationChannelEditor",
+    "roles/monitoring.uptimeCheckConfigEditor",
+    "roles/monitoring.viewer",
     "roles/pubsub.admin",
     "roles/redis.admin",
     "roles/run.admin",
     "roles/secretmanager.admin",
     "roles/servicenetworking.networksAdmin",
-    "roles/serviceusage.serviceUsageAdmin",
     "roles/storage.admin",
     "roles/vpcaccess.admin",
     "roles/workflows.admin",
@@ -57,6 +62,11 @@ locals {
 
   only_grantable = "api.getAttribute(\"iam.googleapis.com/modifiedGrantsByRole\", []).hasOnly(${jsonencode(local.grantable_roles)})"
 
+  # The eleventh has a grant of its own, so one request can only change one of the two lists.
+  more_grantable_roles = ["roles/cloudsql.instanceUser"]
+
+  only_more_grantable = "api.getAttribute(\"iam.googleapis.com/modifiedGrantsByRole\", []).hasOnly(${jsonencode(local.more_grantable_roles)})"
+
   # Service => resource types. Plan reads their configuration. Destroy can also delete them.
   resource_types = {
     aiplatform         = ["batchPredictionJobs", "customJobs", "datasets", "deploymentResourcePools", "endpoints", "featureGroups", "featureOnlineStores", "featureViews", "indexEndpoints", "indexes", "models", "pipelineJobs", "reasoningEngines", "schedules", "tensorboards", "trainingPipelines"]
@@ -67,7 +77,7 @@ locals {
     cloudfunctions     = ["functions"]
     cloudkms           = ["cryptoKeyVersions", "cryptoKeys", "keyRings"]
     cloudscheduler     = ["jobs"]
-    cloudsql           = ["databases", "instances", "sslCerts", "users"]
+    cloudsql           = ["backupRuns", "databases", "instances", "sslCerts", "users"]
     cloudtasks         = ["queues"]
     compute            = ["addresses", "autoscalers", "backendBuckets", "backendServices", "disks", "firewallPolicies", "firewalls", "forwardingRules", "globalAddresses", "globalForwardingRules", "globalNetworkEndpointGroups", "healthChecks", "images", "instanceGroupManagers", "instanceGroups", "instanceTemplates", "instances", "networkAttachments", "networkEndpointGroups", "networks", "regionBackendServices", "regionHealthChecks", "regionNetworkEndpointGroups", "regionSecurityPolicies", "regionSslCertificates", "regionTargetHttpProxies", "regionTargetHttpsProxies", "regionTargetTcpProxies", "regionUrlMaps", "resourcePolicies", "routers", "routes", "securityPolicies", "serviceAttachments", "snapshots", "sslCertificates", "sslPolicies", "subnetworks", "targetHttpProxies", "targetHttpsProxies", "targetInstances", "targetPools", "targetSslProxies", "targetTcpProxies", "urlMaps", "vpnGateways", "vpnTunnels"]
     container          = ["clusters"]
@@ -79,7 +89,7 @@ locals {
     monitoring         = ["alertPolicies", "dashboards", "groups", "metricDescriptors", "notificationChannels", "services", "slos", "uptimeCheckConfigs"]
     pubsub             = ["schemas", "snapshots", "subscriptions", "topics"]
     redis              = ["clusters", "instances"]
-    run                = ["executions", "jobs", "revisions", "services", "workerpools"]
+    run                = ["executions", "instances", "jobs", "revisions", "services", "workerpools"]
     secretmanager      = ["secrets"]
     vpcaccess          = ["connectors"]
     workflows          = ["workflows"]
@@ -214,6 +224,24 @@ resource "google_project_iam_custom_role" "project_grants" {
   permissions = setintersection(local.project_grant_permissions, local.offered)
 }
 
+# A second opinion for the night run of cloud-labs: searches for what no list of a service shows. Google offers this one or
+# refuses the role, so it does not go through local.offered: there it would vanish without a word.
+resource "google_project_iam_custom_role" "census" {
+  project     = var.project_id
+  role_id     = "ghaCensus"
+  title       = "GitHub Actions census"
+  description = "Searches everything in the project. Only for the night run of cloud-labs."
+  permissions = ["cloudasset.assets.searchAllResources"]
+}
+
+resource "google_project_iam_member" "census" {
+  project = var.project_id
+  role    = google_project_iam_custom_role.census.id
+  member  = local.principal["cloud-labs/destroy"]
+
+  depends_on = [google_iam_workload_identity_pool_provider.github]
+}
+
 resource "google_project_iam_member" "read" {
   for_each = toset(["plan", "destroy"])
 
@@ -260,6 +288,42 @@ resource "google_project_iam_member" "apply_grants" {
     description = "May grant or revoke a fixed list of roles. None of them administers access."
     expression  = local.only_grantable
   }
+
+  depends_on = [google_iam_workload_identity_pool_provider.github]
+}
+
+resource "google_project_iam_member" "apply_more_grants" {
+  project = var.project_id
+  role    = google_project_iam_custom_role.project_grants.id
+  member  = local.tier_principals["apply"]
+
+  condition {
+    title       = "only-database-sign-in"
+    description = "May grant or revoke one role, with which a workload signs in to a database without a password."
+    expression  = local.only_more_grantable
+  }
+
+  depends_on = [google_iam_workload_identity_pool_provider.github]
+}
+
+locals {
+  # run.sh turns them on, and the night compares. Here only for the tests.
+  services = jsondecode(file("${path.module}/services.json"))["deploy"]
+}
+
+# Sees which services are on, and has its calls counted against the project. Turns none on or off.
+resource "google_project_iam_custom_role" "services" {
+  project     = var.project_id
+  role_id     = "ghaServices"
+  title       = "GitHub Actions services"
+  description = "Sees which services are on. Turns none on or off."
+  permissions = ["serviceusage.services.get", "serviceusage.services.list", "serviceusage.services.use"]
+}
+
+resource "google_project_iam_member" "apply_services" {
+  project = var.project_id
+  role    = google_project_iam_custom_role.services.id
+  member  = local.tier_principals["apply"]
 
   depends_on = [google_iam_workload_identity_pool_provider.github]
 }

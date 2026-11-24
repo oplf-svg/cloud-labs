@@ -13,12 +13,15 @@ on:
     branches: [main]
     paths:
       - site/**
+  # Each morning the looks, and nothing else. What they say then is decided in deploy.py.
+  schedule:
+    - cron: "41 6 * * *"
   workflow_dispatch:
 
 permissions: {}
 
 concurrency:
-  group: site-${{ github.event.pull_request.number || 'main' }}
+  group: site-${{ github.event.pull_request.number || github.event_name == 'schedule' && 'morning' || 'main' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -102,7 +105,7 @@ jobs:
 
   # GitHub approves everything that waits for an environment at once. So the deploys never wait together.
   deploy-azure:
-    if: ${{ !cancelled() && needs.look-azure.result == 'success' }}
+    if: ${{ !cancelled() && github.event_name != 'schedule' && needs.look-azure.result == 'success' }}
     needs: [look-azure, look-aws]
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -129,7 +132,7 @@ jobs:
       - run: python3 site/deploy/deploy.py apply azure
 
   deploy-aws:
-    if: ${{ !cancelled() && needs.look-aws.result == 'success' }}
+    if: ${{ !cancelled() && github.event_name != 'schedule' && needs.look-aws.result == 'success' }}
     needs: [look-aws, deploy-azure]
     runs-on: ubuntu-24.04
     timeout-minutes: 45

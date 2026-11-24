@@ -17,11 +17,21 @@ import urllib.error
 import urllib.request
 
 OWNER = "oplf-svg"
-SUBJECTS = json.loads((pathlib.Path(__file__).resolve().parent.parent / "subjects.json").read_text())
+BOOTSTRAP = pathlib.Path(__file__).resolve().parent.parent
+SUBJECTS = json.loads((BOOTSTRAP / "subjects.json").read_text())
+COST = json.loads((BOOTSTRAP / "cost.json").read_text())
 DESTROY_WORKFLOW = ".github/workflows/nightly-destroy.yml"
 
 # What each tier trusts: the environment that its subject names, and whether a person has to approve every job in it.
 ENVIRONMENTS = {"plan": ("plan", False), "apply": ("production", True), "destroy": ("nightly-destroy", False)}
+
+# What GitHub puts into every subject, in this order, and how a subject has to end because of it. Without it, the subject
+# of a job in an environment does not say which branch the job is from.
+TEMPLATE = ["repo", "context", "ref"]
+BRANCH = "ref:refs/heads/main"
+
+# What has to pass before anything gets into main, and who reports it: GitHub Actions.
+CHECK = {"context": "ci", "app_id": 15368}
 
 # GitHub turns off schedules in a public repo after 60 days without activity. Stopping at 50
 # means that any stack created today still has at least ten nights of working schedule ahead.
@@ -76,18 +86,46 @@ def environment_problems(repo, name, listing, fetch, reviewer_wanted):
     return problems
 
 
+def subject_problems(repo, prefix, fetch):
+    """What the clouds compare has to be what GitHub writes."""
+    problems = []
+    if SUBJECTS[repo] != {tier: f"{prefix}:environment:{name}:{BRANCH}" for tier, (name, _) in ENVIRONMENTS.items()}:
+        problems.append("subjects.json does not match the repo's ids")
+    if any(subject != f"{prefix}:environment:{name}:{BRANCH}" for name, subject in COST.get(repo, {}).items()):
+        problems.append("cost.json does not match the repo's ids")
+    template = fetch(f"/repos/{OWNER}/{repo}/actions/oidc/customization/sub") or {}
+    if template.get("use_default") is not False or template.get("include_claim_keys") != TEMPLATE:
+        problems.append("GitHub's subject does not end with the branch")
+    # Both are left out of some answers. The clouds compare the ids anyway.
+    if template.get("use_immutable_subject") is False or template.get("sub_claim_prefix", prefix) != prefix:
+        problems.append("GitHub's subject does not hold the repo's ids")
+    return problems
+
+
+def main_problems(repo, fetch):
+    """All of it rests on what gets into main. How many have to approve, GitHub shows to administrators only."""
+    branch = fetch(f"/repos/{OWNER}/{repo}/branches/main") or {}
+    required = (branch.get("protection") or {}).get("required_status_checks") or {}
+    needed = any(CHECK.items() <= check.items() for check in required.get("checks", []))
+    if branch.get("protected") is not True or required.get("enforcement_level") != "everyone" or not needed:
+        return ["main does not need the check ci from everyone"]
+    return []
+
+
 def check_environments(repo, fetch):
-    """The trust is only as strong as the environments behind it."""
+    """The trust is only as strong as the rules behind it."""
     info = fetch(f"/repos/{OWNER}/{repo}")
     if info is None:
         return ["repo does not exist or is not public"]
 
     problems = []
-    prefix = f"repo:{OWNER}@{info['owner']['id']}/{repo}@{info['id']}:"
-    if SUBJECTS[repo] != {tier: f"{prefix}environment:{name}" for tier, (name, _) in ENVIRONMENTS.items()}:
-        problems.append("subjects.json does not match the repo's ids")
+    # In a private repo of a free account, GitHub ignores the rules of an environment.
+    if info.get("private") is not False:
+        problems.append("repo is not public")
+    problems += subject_problems(repo, f"repo:{OWNER}@{info['owner']['id']}/{repo}@{info['id']}", fetch)
+    problems += main_problems(repo, fetch)
     listing = fetch(f"/repos/{OWNER}/{repo}/environments") or {}
-    for name, reviewer_wanted in ENVIRONMENTS.values():
+    for name, reviewer_wanted in [*ENVIRONMENTS.values(), *((name, False) for name in COST.get(repo, {}))]:
         problems += environment_problems(repo, name, listing, fetch, reviewer_wanted)
     return problems
 
