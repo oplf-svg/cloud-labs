@@ -1,0 +1,106 @@
+name: ci
+
+# No branch or path filter: a filtered-out run would leave the required check "ci" pending forever.
+# "edited" is here because a pull request's title becomes part of the commit on main.
+# No manual trigger: a manual run on the same commit could report "ci" without checking the commits.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  # The other jobs can print lines of the code, so they wait until no private term is in it.
+  terraform:
+    name: terraform (${{ matrix.stack }})
+    needs: blocked-terms
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        stack: [aws, azure, gcp]
+    defaults:
+      run:
+        working-directory: bootstrap/${{ matrix.stack }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Terraform
+        run: |
+          ../scripts/install-terraform.sh "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - run: terraform fmt -check -diff -recursive
+      - run: terraform init -backend=false -input=false -lockfile=readonly
+      - run: terraform validate
+      - name: Test against mocked providers
+        run: terraform test
+
+  scripts:
+    needs: blocked-terms
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: shellcheck bootstrap/scripts/*.sh
+      - run: python3 -m unittest discover --start-directory bootstrap/scripts
+      - run: python3 -m unittest discover --start-directory .github/scripts
+
+  blocked-terms:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      attempt: ${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # Asked for again on every run, because a re-run replays the title it first saw.
+      - name: Get the current title and description
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUMBER: ${{ github.event.pull_request.number }}
+        run: gh api "repos/$GITHUB_REPOSITORY/pulls/$NUMBER" > "$RUNNER_TEMP/pull.json"
+      - name: Look for private terms
+        env:
+          BLOCKED_TERMS: ${{ secrets.BLOCKED_TERMS }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PULL_REQUEST_FILE: ${{ runner.temp }}/pull.json
+        run: python3 .github/scripts/blocked_terms.py
+
+  # The required check. It runs even when a job above fails or is skipped, because GitHub
+  # counts a skipped required check as passed. After a failure, re-run all jobs: "failed jobs
+  # only" would reuse a blocked-terms result from before the title was edited, so it fails here.
+  ci:
+    if: ${{ always() }}
+    needs: [blocked-terms, terraform, scripts]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Fail unless every job succeeded
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+          ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          jq --raw-output 'to_entries[] | "\(.key): \(.value.result)"' <<< "$RESULTS"
+          jq --exit-status --arg attempt "$ATTEMPT" '
+            length == 3
+            and all(.[]; .result == "success")
+            and ."blocked-terms".outputs.attempt == $attempt
+          ' <<< "$RESULTS" > /dev/null

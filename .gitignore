@@ -1,0 +1,17 @@
+# Terraform working files. The dependency lock files are committed on purpose.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+crash.log
+crash.*.log
+
+# Written at run time. These hold account, subscription, project or bucket names.
+backend.tf
+*.tfvars
+*.tfvars.json
+*_override.tf
+override.tf
+
+__pycache__/
