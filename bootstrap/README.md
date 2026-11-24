@@ -88,8 +88,11 @@ for r in $(jq -r 'keys[]' subjects.json); do curl -s "https://api.github.com/rep
 | `destroy` | The `plan` reads, plus delete actions | The `plan` reads, plus `*/delete` on the repo's resource group | The `plan` reads, plus delete on the same types |
 
 No tier can change this trust, hand out administrator rights, touch the state storage or another repo's state, create
-sign-in keys or passwords for an identity, buy commitments, accept the terms of a model or of AWS Marketplace, change a
-flat-rate plan of CloudFront or read billing data.
+sign-in keys or passwords for an identity, buy commitments, accept the terms of a model or of the marketplaces of AWS and
+Azure, change a flat-rate plan of CloudFront or read billing data.
+
+Models are paid by the call. On AWS no tier can call one, and a workload only those in [models.json](models.json). On Azure
+one can only be called where somebody has set it up, and no tier can do that. Google Cloud has no such limit yet.
 
 So that its night run has a second opinion about what is left, `destroy` of `cloud-labs` may also see which resource
 groups there are on Azure, and search the whole project on Google Cloud. No other identity may.

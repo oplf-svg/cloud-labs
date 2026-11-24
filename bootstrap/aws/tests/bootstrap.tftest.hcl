@@ -233,6 +233,85 @@ run "permissions" {
   }
 }
 
+run "models" {
+  command = apply
+
+  # The form of an entry. A name with a wildcard in it would be more than one model.
+  assert {
+    condition = alltrue([
+      for name, m in local.models :
+      can(regex("^[a-z0-9-]+$", name))
+      && jsonencode(keys(m)) == jsonencode(["aws"])
+      && jsonencode(keys(m.aws)) == jsonencode(["model", "profile", "regions"])
+      && can(regex("^[a-z0-9]+[.][a-z0-9.:-]+$", m.aws.model))
+      && (
+        m.aws.profile == null ? jsonencode(m.aws.regions) == jsonencode(["eu-west-2"])
+        : m.aws.profile == "eu.${m.aws.model}" ? jsonencode(m.aws.regions) == jsonencode(["eu-*"])
+        : m.aws.profile == "global.${m.aws.model}" && jsonencode(m.aws.regions) == jsonencode(["eu-west-2", ""])
+      )
+    ])
+    error_message = "A model in models.json is one model, in London, in Europe or worldwide."
+  }
+
+  # Written out again here on purpose, so that a change to models.json fails the test.
+  assert {
+    condition = jsonencode([for s in jsondecode(aws_iam_policy.workload_boundary.policy).Statement : s if s.Sid == "OnlyListedModels"]) == jsonencode([{
+      Sid    = "OnlyListedModels"
+      Effect = "Deny"
+      Action = "bedrock:Invoke*"
+      NotResource = [
+        "arn:aws:bedrock:eu-west-2:111122223333:inference-profile/eu.anthropic.claude-haiku-5-5",
+        "arn:aws:bedrock:eu-*::foundation-model/anthropic.claude-haiku-5-5",
+        "arn:aws:bedrock:eu-west-2:111122223333:project/*",
+      ]
+    }])
+    error_message = "A workload may call the one model in the list, through its European profile, and no other."
+  }
+
+  # From AWS's own list of actions: what runs, trains or hosts a model, or signs in with a key.
+  assert {
+    condition = alltrue([
+      for p in [aws_iam_policy.guardrails, aws_iam_policy.workload_boundary] : alltrue([
+        for a in [
+          "bedrock-mantle:CallWithBearerToken", "bedrock-mantle:CreateCustomizedModel", "bedrock-mantle:CreateFineTuningJob", "bedrock-mantle:CreateInference", "bedrock-mantle:CreateReservation", "bedrock-mantle:UpdateReservation",
+          "bedrock:AgenticRetrieveStream", "bedrock:CallWithBearerToken", "bedrock:CreateAdvancedPromptOptimizationJob", "bedrock:CreateCustomModel", "bedrock:CreateCustomModelDeployment", "bedrock:CreateEvaluationJob",
+          "bedrock:CreateInferenceProfile", "bedrock:CreateMarketplaceModelEndpoint", "bedrock:CreateModelCopyJob", "bedrock:CreateModelCustomizationJob", "bedrock:CreateModelEvaluationJob", "bedrock:CreateModelImportJob",
+          "bedrock:CreateModelInvocationJob", "bedrock:CreatePromptRouter", "bedrock:CreateProvisionedModelThroughput", "bedrock:GenerateQuery", "bedrock:IngestKnowledgeBaseDocuments", "bedrock:OptimizePrompt",
+          "bedrock:RegisterMarketplaceModelEndpoint", "bedrock:Rerank", "bedrock:Retrieve", "bedrock:RetrieveAndGenerate", "bedrock:StartAutomatedReasoningPolicyBuildWorkflow", "bedrock:StartAutomatedReasoningPolicyTestWorkflow",
+          "bedrock:StartFlowExecution", "bedrock:StartIngestionJob", "bedrock:UpdateCustomModelDeployment", "bedrock:UpdateMarketplaceModelEndpoint", "bedrock:UpdateProvisionedModelThroughput",
+        ] :
+        anytrue([
+          for s in jsondecode(p.policy).Statement : anytrue([for d in flatten([s.Action]) : can(regex("^${replace(d, "*", ".*")}$", a))])
+          if s.Effect == "Deny" && try(s.Resource, "") == "*" && can(s.Action) && !can(s.Condition)
+        ])
+      ])
+    ])
+    error_message = "No pipeline, and nothing that one creates, may use models in another way than by calling a listed one."
+  }
+
+  assert {
+    condition = alltrue([
+      for a in ["InvokeAgent", "InvokeBuilder", "InvokeDataAutomationAsync", "InvokeFlow", "InvokeInlineAgent", "InvokeModel", "InvokeModelWithResponseStream", "InvokeTool"] :
+      anytrue([
+        for s in jsondecode(aws_iam_policy.guardrails.policy).Statement : anytrue([for d in flatten([s.Action]) : can(regex("^${replace(d, "*", ".*")}$", "bedrock:${a}"))])
+        if s.Effect == "Deny" && try(s.Resource, "") == "*" && can(s.Action) && !can(s.Condition)
+      ])
+    ])
+    error_message = "No pipeline may call a model itself."
+  }
+
+  # Otherwise the list would be worth nothing: a workload could call no model at all.
+  assert {
+    condition = alltrue([
+      for a in ["InvokeModel", "InvokeModelWithResponseStream"] : !anytrue([
+        for s in jsondecode(aws_iam_policy.workload_boundary.policy).Statement : anytrue([for d in flatten([s.Action]) : can(regex("^${replace(d, "*", ".*")}$", "bedrock:${a}"))])
+        if s.Effect == "Deny" && try(s.Resource, "") == "*" && can(s.Action) && !can(s.Condition)
+      ])
+    ])
+    error_message = "A workload must be able to call a listed model."
+  }
+}
+
 run "cost" {
   command = apply
 

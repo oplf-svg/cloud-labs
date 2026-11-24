@@ -1,0 +1,9 @@
+{
+  "claude-haiku-5-5": {
+    "aws": {
+      "model": "anthropic.claude-haiku-5-5",
+      "profile": "eu.anthropic.claude-haiku-5-5",
+      "regions": ["eu-*"]
+    }
+  }
+}

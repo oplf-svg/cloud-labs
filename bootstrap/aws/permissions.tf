@@ -182,6 +182,41 @@ locals {
   # A second way in, with certificates instead of GitHub.
   sign_in_actions = ["rolesanywhere:*"]
 
+  # Models are paid by the call. A workload may call those in models.json, and a pipeline none at all.
+  models = jsondecode(file("${path.module}/../models.json"))
+
+  # AWS checks the profile that a call goes through, and the model in each region that the profile can use.
+  model_arns = flatten([for m in local.models : concat(
+    m.aws.profile == null ? [] : ["arn:aws:bedrock:${var.region}:${var.account_id}:inference-profile/${m.aws.profile}"],
+    [for region in m.aws.regions : "arn:aws:bedrock:${region}::foundation-model/${m.aws.model}"],
+  )])
+
+  # What else runs, trains or hosts a model in Bedrock, or signs in there with a key.
+  other_model_actions = [
+    "bedrock-mantle:CallWithBearerToken",
+    "bedrock-mantle:Create*",
+    "bedrock-mantle:Update*",
+    "bedrock:AgenticRetrieve*",
+    "bedrock:CallWithBearerToken",
+    "bedrock:CreateAdvancedPromptOptimizationJob",
+    "bedrock:CreateCustomModel*",
+    "bedrock:CreateEvaluationJob",
+    "bedrock:CreateInferenceProfile",
+    "bedrock:CreateMarketplaceModelEndpoint",
+    "bedrock:CreateModel*",
+    "bedrock:CreatePromptRouter",
+    "bedrock:GenerateQuery",
+    "bedrock:IngestKnowledgeBaseDocuments",
+    "bedrock:OptimizePrompt",
+    "bedrock:RegisterMarketplaceModelEndpoint",
+    "bedrock:Rerank",
+    "bedrock:Retrieve*",
+    "bedrock:Start*",
+    "bedrock:UpdateCustomModelDeployment",
+    "bedrock:UpdateMarketplaceModelEndpoint",
+    "bedrock:UpdateProvisionedModelThroughput",
+  ]
+
   shared_denies = [
     {
       Sid      = "NoAccountBillingOrPersonalData"
@@ -241,6 +276,12 @@ resource "aws_iam_policy" "guardrails" {
           "iam:UploadSigningCertificate",
           "iam:UploadSSHPublicKey",
         ]
+        Resource = "*"
+      },
+      {
+        Sid      = "NoModels"
+        Effect   = "Deny"
+        Action   = concat(["bedrock:Invoke*"], local.other_model_actions)
         Resource = "*"
       },
     ], local.shared_denies)
@@ -371,6 +412,19 @@ resource "aws_iam_policy" "workload_boundary" {
         Effect      = "Deny"
         Action      = ["sts:AssumeRole", "sts:AssumeRoot"]
         NotResource = local.workload_roles
+      },
+      {
+        # A project costs nothing, and some ways of calling a model ask for the right to one too.
+        Sid         = "OnlyListedModels"
+        Effect      = "Deny"
+        Action      = "bedrock:Invoke*"
+        NotResource = concat(local.model_arns, ["arn:aws:bedrock:${var.region}:${var.account_id}:project/*"])
+      },
+      {
+        Sid      = "NoOtherModelWork"
+        Effect   = "Deny"
+        Action   = local.other_model_actions
+        Resource = "*"
       },
     ], local.shared_denies)
   })

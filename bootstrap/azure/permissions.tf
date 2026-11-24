@@ -79,6 +79,17 @@ locals {
     "Microsoft.Subscription/enable/action",
   ]
 
+  # Models are paid by the call, and on Azure one can only be called where somebody has set it up. That is for a person,
+  # and so is accepting what is sold on Marketplace.
+  no_models = [
+    "Microsoft.CognitiveServices/*/action",
+    "Microsoft.CognitiveServices/*/write",
+    "Microsoft.MachineLearningServices/*/action",
+    "Microsoft.MachineLearningServices/*/write",
+    "Microsoft.Marketplace/*",
+    "Microsoft.MarketplaceOrdering/*",
+  ]
+
   # The only roles a pipeline may grant or revoke, and only for service principals. None of
   # them can assign roles. The pipelines' own roles are not listed, so they cannot be removed.
   grantable_roles = {
@@ -160,7 +171,7 @@ resource "azurerm_role_definition" "apply" {
 
   permissions {
     actions     = ["*"]
-    not_actions = concat(local.not_contributor, ["Microsoft.Resources/subscriptions/resourceGroups/delete"])
+    not_actions = concat(local.not_contributor, local.no_models, ["Microsoft.Resources/subscriptions/resourceGroups/delete"])
   }
 }
 
@@ -183,7 +194,8 @@ resource "azurerm_role_definition" "destroy" {
   }
 }
 
-# Registering a resource provider is free and happens at subscription level, outside any group.
+# Registering a resource provider is free and happens at subscription level, outside any group. Not those of models and of
+# Marketplace.
 resource "azurerm_role_definition" "register" {
   name              = "GitHub Actions provider registration"
   description       = "Registers resource providers. No preview features."
@@ -192,7 +204,7 @@ resource "azurerm_role_definition" "register" {
 
   permissions {
     actions     = ["*/register/action", "Microsoft.Resources/subscriptions/providers/read"]
-    not_actions = ["Microsoft.Features/*"]
+    not_actions = ["Microsoft.CognitiveServices/*", "Microsoft.Features/*", "Microsoft.MachineLearningServices/*", "Microsoft.Marketplace/*", "Microsoft.MarketplaceOrdering/*"]
   }
 }
 
