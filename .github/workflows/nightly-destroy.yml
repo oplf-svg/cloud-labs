@@ -1,10 +1,13 @@
 name: nightly-destroy
 
 # Every night, as the identity that can only delete: looks for Terraform state that nobody declared, and checks where that
-# identity's rights end. What it does stands in night.py and not here, because agents may not change a workflow file.
+# identity's rights end. And without any identity: looks whether the rules on GitHub are still there that all of this rests
+# on. What it does stands in night.py and not here, because agents may not change a workflow file.
 on:
   schedule:
+    # Twice, because GitHub may drop a start.
     - cron: "17 2 * * *"
+    - cron: "17 4 * * *"
   workflow_dispatch:
 
 permissions: {}
@@ -14,6 +17,21 @@ concurrency:
 
 # The environment allows main only. Each job names its own cloud's secrets and no others.
 jobs:
+  # No environment and no token for a cloud. GitHub shows these rules to everyone, but not often without a sign-in.
+  github:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: python3 bootstrap/scripts/night.py github
+
   aws:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -66,3 +84,29 @@ jobs:
         with:
           persist-credentials: false
       - run: python3 bootstrap/scripts/night.py gcp
+
+  # A red run does not ring on a phone, and an issue that names its reader does. This runs no code of the repo, may write issues
+  # and nothing else, and what it writes is fixed but for the names of the jobs.
+  tell:
+    if: ${{ always() }}
+    needs: [github, aws, azure, gcp]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: An issue that rings on the owner's phone, if a job did not succeed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          red="$(jq --exit-status --raw-output 'if length == 4 then [to_entries[] | select(.value.result != "success") | .key] | join(", ") else error end' <<< "$RESULTS")"
+          [ -n "$red" ] || exit 0
+          said="@oplf-svg: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          title="The night run is red"
+          open="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" --json number,title --jq "[.[] | select(.title == \"$title\")][0].number // empty")"
+          if [ -n "$open" ]; then
+            gh issue comment "$open" --repo "$GITHUB_REPOSITORY" --body "$red. $said"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$red. $said"
+          fi

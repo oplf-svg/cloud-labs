@@ -1,0 +1,80 @@
+name: cost
+
+# Signs in to each cloud as the identity that reads what has been spent and nothing else, and checks where its rights end.
+# The environment allows main only, so nothing runs here before a person has approved it. What it does stands in
+# check_cost.py and not here, because agents may not change a workflow file. Asking AWS costs 0.01 USD each time.
+on:
+  push:
+    branches: [main]
+    paths:
+      - bootstrap/**
+      - .github/workflows/cost.yml
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: cost
+
+# Each job names its own cloud's secrets and no others. GitHub hides a value only in jobs that use it. Nothing is deployed
+# here, so GitHub's list of deployments does not show it.
+jobs:
+  aws:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: cost
+      deployment: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+      AWS_STATE_BUCKET: ${{ secrets.AWS_STATE_BUCKET }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: python3 bootstrap/scripts/check_cost.py aws
+
+  azure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: cost
+      deployment: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_STATE_ACCOUNT: ${{ secrets.AZURE_STATE_ACCOUNT }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: python3 bootstrap/scripts/check_cost.py azure
+
+  gcp:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: cost
+      deployment: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GCP_COST_PROJECT_ID: ${{ secrets.GCP_COST_PROJECT_ID }}
+      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+      GCP_PROJECT_NUMBER: ${{ secrets.GCP_PROJECT_NUMBER }}
+      GCP_STATE_BUCKET: ${{ secrets.GCP_STATE_BUCKET }}
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: python3 bootstrap/scripts/check_cost.py gcp
