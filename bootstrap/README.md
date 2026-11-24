@@ -100,19 +100,21 @@ else.
 
 ## Testing the sign-in
 
-[sign-in.yml](../.github/workflows/sign-in.yml) runs on every pull request that changes this folder. It signs in to AWS
-and Azure as this repo's `plan`, and [check_sign_in.py](scripts/check_sign_in.py) tries what that identity may and may
-not do. It must be able to look around and to read its own state. It must be refused when it creates something, writes
-state, or reads what belongs to another repo or to the bootstrap, and on AWS when it asks for another role.
+[sign-in.yml](../.github/workflows/sign-in.yml) runs on every pull request that changes this folder. It signs in to each
+cloud as this repo's `plan`, and [check_sign_in.py](scripts/check_sign_in.py) tries what that identity may and may not
+do. It must be able to look around and to read its own state. It must be refused when it creates something, writes
+state, or reads what belongs to another repo or to the bootstrap, on AWS when it asks for another role, and on Google
+Cloud when it wants to act as a service account or change who has access.
 
 On AWS only a file that exists can show who may open it. S3 says that a file is missing to everyone who may list the
-bucket, whatever they may open. So as long as a repo has no state, its line says `nothing there`.
+bucket, whatever they may open. So as long as a repo has no state, its line can say `nothing there`.
 
-Nothing is changed, even if a right turns out to be too wide: every write is a dry run, a validation, or the replacement
-of a file that does not exist. The log is public, so it shows the script's own words and error codes only.
+Nothing is changed, even if a right turns out to be too wide: every write is a dry run, a validation, a question about a
+permission, or the replacement of a file that does not exist. The log is public, so it shows the script's own words and
+error codes only.
 
 This tests `plan`, the only identity that a pull request can use. `apply` and `destroy` are first used by a repo's own
-workflows. Google Cloud is not part of it yet.
+workflows.
 
 ## If the nightly destroy stops
 
@@ -158,7 +160,8 @@ python3 scripts/github_checks.py schedules
 - An approved `apply` is trusted with the workloads. Within the limits above it could also leave access behind for
   someone else: an AWS workload role that trusts another account, an Azure identity federated elsewhere, a Google Cloud
   grant to an outside member. Nothing stops that except reading what you approve.
-- On AWS, every role can list the names of all files in the state bucket, but can open only its own repo's.
+- On AWS and Google Cloud, every identity can list the names of all files in the state bucket, but can open only its
+  own repo's.
 - The repos share one AWS account and one Google Cloud project for what they deploy. There, one repo's `apply` or
   `destroy` can reach another repo's resources, though never its state. On Azure each repo is confined to its own group.
 - `plan` sees what a service returns as configuration: environment variables, Cognito client secrets, alarm recipients,

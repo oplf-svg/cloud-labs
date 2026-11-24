@@ -1,4 +1,4 @@
-"""Runs check_sign_in.py against stand-ins for GitHub, the AWS CLI and Azure. Nothing real is called."""
+"""Runs check_sign_in.py against stand-ins for GitHub, the AWS CLI, Azure and Google. Nothing real is called."""
 
 import base64
 import contextlib
@@ -21,6 +21,9 @@ ACCOUNT, BUCKET = "111122223333", "tfstate-0a1b2c3d"
 ROLES = f"arn:aws:iam::{ACCOUNT}:role/github-actions"
 CLIENT, SUBSCRIPTION, TENANT = (f"00000000-0000-0000-0000-00000000000{n}" for n in (1, 2, 3))
 STORE = "tfstate0a1b2c3d"
+PROJECT, NUMBER, HOME_NUMBER = "example-project-1", "210987654321", "123456789012"
+PROVIDER = f"projects/{HOME_NUMBER}/locations/global/workloadIdentityPools/github-actions/providers/github"
+GOOGLE_BUCKET = "tfstate-4e5f6a7b"
 OFFER = "request-token-of-the-job"
 KEY, SECRET, SESSION, BEARER = "ASIAEXAMPLEKEY", "example-secret-key", "example-session-token", "example-access-token"
 
@@ -34,6 +37,10 @@ ENV = {
     "AZURE_STATE_ACCOUNT": STORE,
     "AZURE_SUBSCRIPTION_ID": SUBSCRIPTION,
     "AZURE_TENANT_ID": TENANT,
+    "GCP_PROJECT_ID": PROJECT,
+    "GCP_PROJECT_NUMBER": NUMBER,
+    "GCP_STATE_BUCKET": GOOGLE_BUCKET,
+    "GCP_WORKLOAD_IDENTITY_PROVIDER": PROVIDER,
     "GITHUB_REPOSITORY": f"oplf-svg/{REPO}",
     "HOME": "/home/runner",
     "PATH": "/usr/bin",
@@ -49,6 +56,7 @@ TOKEN = jwt(SUBJECT)
 
 # What must never be in a public log.
 PRIVATE = [ACCOUNT, BUCKET, ROLES, CLIENT, SUBSCRIPTION, TENANT, STORE, OFFER, KEY, SECRET, SESSION, BEARER, TOKEN]
+PRIVATE += [PROJECT, NUMBER, HOME_NUMBER, GOOGLE_BUCKET]
 
 # The state bucket once repos have deployed something. Before that, only the bootstrap's file is there.
 STATES = tuple(f"{owner}/terraform.tfstate" for owner in ("bootstrap", *checks.SUBJECTS))
@@ -114,15 +122,36 @@ def no_blob(code, status=403):
     return status, {"x-ms-error-code": code}, f"<Error><Message>{STORE} {TENANT}</Message></Error>".encode()
 
 
-class FakeWeb:
-    """Answers as GitHub and Azure should. `changes` maps part of a request to another answer."""
+def no_google(code, *reasons, **error):
+    # As Google does, with everything in it that a log must not show. Storage names its reason in another place.
+    error |= {"code": code, "message": f"principal://{PROVIDER} may not use {PROJECT}, {NUMBER} or {GOOGLE_BUCKET}"}
+    for reason in reasons:
+        details = reason.isupper()
+        error["details" if details else "errors"] = [{"message": NUMBER}, {"reason": reason, "metadata": PROJECT}]
+    return code, {}, json.dumps({"error": error}).encode()
 
-    def __init__(self, changes=None, token=TOKEN, repo=REPO):
+
+class FakeWeb:
+    """Answers as GitHub, Azure and Google should. `changes` maps part of a request to another answer."""
+
+    def __init__(self, changes=None, token=TOKEN, repo=REPO, files=("bootstrap/default.tfstate",), granted=()):
         self.changes, self.token, self.repo, self.requests = changes or {}, token, repo, []
+        self.files, self.granted = files, {"resourcemanager.projects.get", *granted}
+
+    def google_storage(self, method, url):
+        parts = urllib.parse.urlsplit(url)
+        if parts.path == f"/storage/v1/b/{GOOGLE_BUCKET}/o" and method == "GET":
+            prefix = urllib.parse.parse_qs(parts.query)["prefix"][0]
+            items = [{"name": name} for name in self.files if name.startswith(prefix)]
+            return 200, {}, json.dumps({"kind": "storage#objects"} | ({"items": items} if items else {})).encode()
+        name = urllib.parse.unquote(parts.path.removeprefix(f"/storage/v1/b/{GOOGLE_BUCKET}/o/"))
+        if method != "GET" or not name.startswith(f"{self.repo}/"):
+            return no_google(403, "forbidden")
+        return (200, {}, b"{}") if name in self.files else no_google(404, "notFound")
 
     def __call__(self, method, url, headers=None, body=None):
         self.requests.append((method, url, headers or {}, body))
-        line = f"{method} {url} {urllib.parse.unquote((body or b'').decode())}"
+        line = f"{method} {urllib.parse.unquote(url)} {urllib.parse.unquote((body or b'').decode())}"
         for part, reply in self.changes.items():
             if part in line:
                 return reply
@@ -135,6 +164,19 @@ class FakeWeb:
             return (200, {}, b"{}") if f"/rg-{self.repo}?" in url else no("AuthorizationFailed")
         if host == f"{STORE}.blob.core.windows.net":
             return (200, {}, b"<x/>") if f"/{self.repo}?restype" in url else no_blob("AuthorizationPermissionMismatch")
+        if host == "sts.googleapis.com":
+            return 200, {}, json.dumps({"access_token": BEARER}).encode()
+        if host == "cloudresourcemanager.googleapis.com" and url.endswith(f"/{PROJECT}:testIamPermissions"):
+            granted = [name for name in json.loads(body)["permissions"] if name in self.granted]
+            return 200, {}, json.dumps({"permissions": granted}).encode()
+        if host == "cloudresourcemanager.googleapis.com":
+            if not url.endswith(f"/projects/{PROJECT}"):
+                return no_google(403, "IAM_PERMISSION_DENIED")
+            return 200, {}, json.dumps({"name": f"projects/{NUMBER}", "projectId": PROJECT}).encode()
+        if host == "compute.googleapis.com":
+            return 200, {}, b"{}"
+        if host == "storage.googleapis.com":
+            return self.google_storage(method, url)
         raise AssertionError(line)
 
 
@@ -364,6 +406,161 @@ class Azure(Base):
             self.assertTrue(method == "GET" or (method == "POST" and (signs_in or validates)) or "If-Match" in headers, url)
 
 
+class Google(Base):
+    states = tuple(f"{owner}/default.tfstate" for owner in ("bootstrap", *checks.SUBJECTS))
+
+    def test_accepts_the_intended_rights(self):
+        status, output = run("gcp")
+        self.assertEqual(status, 0)
+        self.assertEqual(
+            output.splitlines(),
+            [
+                f"ok   GitHub's subject is {SUBJECT}",
+                "ok   sign in as the plan of cloud-labs: allowed",
+                "ok   read the project: allowed",
+                "ok   be in the expected project: yes",
+                "ok   use London: allowed",
+                "ok   create something: denied",
+                "ok   become a service account: denied",
+                "ok   change who has access: denied",
+                "ok   read the project of the bootstrap: denied",
+                "ok   read its own state: nothing there",
+                "ok   read the state of webhook-platform: denied",
+                "ok   read the state of the bootstrap: denied",
+                "ok   write its own state: denied",
+            ],
+        )
+        self.assert_private(output)
+
+    def test_opens_a_file_as_soon_as_there_is_one(self):
+        status, output = run("gcp", web=FakeWeb(files=self.states))
+        self.assertEqual(status, 0)
+        self.assertIn("ok   read its own state: allowed\n", output)
+        self.assertIn("ok   read the state of webhook-platform: denied\n", output)
+        self.assert_private(output)
+
+    def test_a_missing_file_of_another_repo_may_also_be_reported_missing(self):
+        status, output = run("gcp", web=FakeWeb({f"/o/{OTHER}": no_google(404, "notFound")}))
+        self.assertEqual(status, 0)
+        self.assertIn("ok   read the state of webhook-platform: nothing there\n", output)
+
+    def test_fails_on_a_right_too_many(self):
+        cases = {
+            f"/projects/{HOME_NUMBER} ": ((200, {}, b"{}"), "read the project of the bootstrap"),
+            f"/o/{OTHER}": ((200, {}, b"{}"), "read the state of webhook-platform"),
+            "/o/bootstrap": ((200, {}, b"{}"), "read the state of the bootstrap"),
+            "/upload/": (no_google(412, "conditionNotMet"), "write its own state"),
+        }
+        for part, (reply, what) in cases.items():
+            with self.subTest(what):
+                result = run("gcp", web=FakeWeb({part: reply}, files=self.states))
+                self.assert_fails_only(result, f"FAIL {what}: allowed, should be denied")
+
+    def test_fails_on_a_permission_too_many(self):
+        cases = {
+            "compute.instances.create": "create something",
+            "compute.networks.create": "create something",
+            "storage.buckets.create": "create something",
+            "iam.serviceAccounts.actAs": "become a service account",
+            "iam.serviceAccounts.getAccessToken": "become a service account",
+            "iam.serviceAccountKeys.create": "become a service account",
+            "resourcemanager.projects.setIamPolicy": "change who has access",
+        }
+        for permission, what in cases.items():
+            with self.subTest(permission):
+                result = run("gcp", web=FakeWeb(granted=[permission]))
+                self.assert_fails_only(result, f"FAIL {what}: allowed, should be denied")
+
+    def test_fails_on_a_right_too_few(self):
+        cases = {
+            "/regions/europe-west2": (no_google(403, "IAM_PERMISSION_DENIED", "forbidden"), "use London"),
+            f"/o/{REPO}": (no_google(403, "forbidden"), "read its own state"),
+            f"prefix={REPO}/": (no_google(403, "forbidden"), "read its own state"),
+        }
+        for part, (reply, what) in cases.items():
+            with self.subTest(part):
+                result = run("gcp", web=FakeWeb({part: reply}, files=self.states))
+                self.assert_fails_only(result, f"FAIL {what}: denied, should be allowed")
+
+    def test_no_answer_about_permissions_is_not_taken_for_a_refusal(self):
+        for reply in ((200, {}, b"{}"), (200, {}, b'{"permissions": []}'), no_google(403, "IAM_PERMISSION_DENIED")):
+            status, output = run("gcp", web=FakeWeb({":testIamPermissions": reply}))
+            self.assertEqual(status, 1)
+            self.assertEqual(
+                [line for line in output.splitlines() if line.startswith("FAIL")],
+                [
+                    f"FAIL {what}: no answer, should be denied"
+                    for what in ("create something", "become a service account", "change who has access")
+                ],
+            )
+            self.assert_private(output)
+
+    def test_stops_when_the_sign_in_is_refused(self):
+        refusal = {"error": "unauthorized_client", "error_description": f"Rejected by the condition of {PROVIDER}."}
+        for body, shown in (
+            (json.dumps(refusal).encode(), "unauthorized_client"),
+            (json.dumps({"error": f"see {NUMBER}"}).encode(), "HTTP 403"),
+            (f"<html>{PROVIDER}</html>".encode(), "HTTP 403"),
+        ):
+            with self.subTest(shown):
+                web = FakeWeb({"sts.googleapis.com": (403, {}, body)})
+                line = f"FAIL sign in as the plan of cloud-labs: {shown}, should be allowed"
+                self.assert_fails_only(run("gcp", web=web), line)
+                self.assertEqual(len(web.requests), 2)
+
+    def test_another_error_is_not_taken_for_a_refusal(self):
+        for reply, shown in (
+            (no_google(403, "SERVICE_DISABLED", status="PERMISSION_DENIED"), "SERVICE_DISABLED"),
+            (no_google(403, "accessNotConfigured"), "accessNotConfigured"),
+            (no_google(401, status="UNAUTHENTICATED"), "UNAUTHENTICATED"),
+            (no_google(429), "HTTP 429"),
+            (no_google(403, f"see-{PROJECT}"), "HTTP 403"),
+            ((503, {}, f"<html>{PROJECT}</html>".encode()), "HTTP 503"),
+            ((403, {}, b'{"error": "text"}'), "HTTP 403"),
+            ((403, {}, b'{"error": {"details": ["text"]}}'), "HTTP 403"),
+            ((403, {}, b'{"error": {"status": ["list"]}}'), "HTTP 403"),
+        ):
+            with self.subTest(shown):
+                result = run("gcp", web=FakeWeb({f"/projects/{HOME_NUMBER} ": reply}))
+                self.assert_fails_only(result, f"FAIL read the project of the bootstrap: {shown}, should be denied")
+
+    def test_a_refusal_without_a_reason_counts_by_its_status(self):
+        status, _ = run("gcp", web=FakeWeb({f"/projects/{HOME_NUMBER} ": no_google(403, status="PERMISSION_DENIED")}))
+        self.assertEqual(status, 0)
+
+    def test_notices_another_project(self):
+        reply = (200, {}, json.dumps({"name": "projects/999999999999"}).encode())
+        result = run("gcp", web=FakeWeb({f"/projects/{PROJECT} ": reply}))
+        self.assert_fails_only(result, "FAIL be in the expected project: no, should be yes")
+
+    def test_sends_each_token_only_where_it_belongs(self):
+        web = FakeWeb(files=self.states)
+        run("gcp", web=web)
+        for _, url, headers, body in web.requests:
+            parts = urllib.parse.urlsplit(url)
+            self.assertEqual(parts.scheme, "https")
+            self.assertEqual(TOKEN in (body or b"").decode(), parts.hostname == "sts.googleapis.com")
+            bearer = headers.get("Authorization", "").removeprefix("Bearer ")
+            self.assertEqual(bearer, {"token.example": OFFER, "sts.googleapis.com": ""}.get(parts.hostname, BEARER))
+            for secret in (TOKEN, BEARER, OFFER):
+                self.assertNotIn(secret, url)
+
+    def test_asks_for_the_provider_that_the_secret_names(self):
+        web = FakeWeb()
+        run("gcp", web=web)
+        form = json.loads(next(body for _, url, _, body in web.requests if "sts.googleapis.com" in url))
+        self.assertEqual(form["audience"], f"//iam.googleapis.com/{PROVIDER}")
+        self.assertEqual(form["subjectToken"], TOKEN)
+
+    def test_no_request_can_change_anything(self):
+        web = FakeWeb(files=self.states)
+        run("gcp", web=web)
+        for method, url, _, _ in web.requests:
+            asks = url == "https://sts.googleapis.com/v1/token" or url.endswith(":testIamPermissions")
+            never = url.startswith("https://storage.googleapis.com/upload/") and url.endswith("&ifGenerationMatch=1")
+            self.assertTrue(method == "GET" or (method == "POST" and (asks or never)), url)
+
+
 class Preparation(Base):
     def assert_not_checked(self, message, env=None, web=None, cloud="aws"):
         aws, web = FakeAws(), web or FakeWeb()
@@ -403,7 +600,13 @@ class Preparation(Base):
             self.assert_not_checked("This is not one of the repos in subjects.json.", env=ENV | {"GITHUB_REPOSITORY": name})
 
     def test_asks_github_for_the_audience_of_the_cloud(self):
-        for cloud, audience in {"aws": "sts.amazonaws.com", "azure": "api%3A%2F%2FAzureADTokenExchange"}.items():
+        audiences = {
+            "aws": "sts.amazonaws.com",
+            "azure": "api%3A%2F%2FAzureADTokenExchange",
+            "gcp": "https%3A%2F%2Fiam.googleapis.com%2F" + PROVIDER.replace("/", "%2F"),
+        }
+        self.assertEqual(set(audiences), set(checks.CLOUDS))
+        for cloud, audience in audiences.items():
             web = FakeWeb()
             run(cloud, web=web)
             self.assertEqual(web.requests[0][1], f"https://token.example/ask?api-version=2.0&audience={audience}")

@@ -3,6 +3,7 @@
 
   check_sign_in.py aws
   check_sign_in.py azure
+  check_sign_in.py gcp
 
 Runs in GitHub Actions, in a pull request job that may ask for an OIDC token. It changes nothing: what
 it tries to write could not be written even with the right to. Job logs are public, so it prints its
@@ -31,7 +32,7 @@ ALLOWED, DENIED, EMPTY = "allowed", "denied", "nothing there"
 NAME = "check-sign-in"
 
 # The only part of an error that is ever printed.
-CODE = "[A-Za-z][A-Za-z0-9.]{1,63}"
+CODE = "[A-Za-z][A-Za-z0-9._]{1,63}"
 
 AWS_REGION = "eu-west-2"
 AWS_DENIED = {"AccessDenied", "UnauthorizedOperation"}
@@ -46,6 +47,13 @@ AZURE_TEMPLATE = {
     "contentVersion": "1.0.0.0",
     "resources": [],
 }
+
+GCP_REGION = "europe-west2"
+GCP_DENIED = {"IAM_PERMISSION_DENIED", "PERMISSION_DENIED", "forbidden"}
+# What Google says to someone with the right to write, because there is nothing to replace.
+GCP_ALLOWED = {"conditionNotMet"}
+# The identity must have this one, so an answer without it is no answer.
+GCP_KNOWN = "resourcemanager.projects.get"
 
 
 class Unusable(Exception):
@@ -223,6 +231,86 @@ def check_azure(repo, other, token, env, run, send):
     yield "write its own state", DENIED, store("PUT", f"{repo}/{NAME}", never, b"")
 
 
+def gcp(status, headers, body):
+    """Turns an answer from Google into allowed, denied or an error code."""
+    if 200 <= status < 300:
+        return ALLOWED
+    try:
+        error = json.loads(body)["error"]
+        reasons = [item["reason"] for item in error.get("details", []) + error.get("errors", []) if "reason" in item]
+        code = reasons[0] if reasons else error["status"]
+    except (AttributeError, KeyError, TypeError, ValueError):
+        code = ""
+    return verdict(code if re.fullmatch(CODE, str(code)) else f"HTTP {status}", GCP_ALLOWED, GCP_DENIED)
+
+
+def check_gcp(repo, other, token, env, run, send):
+    """Yields what the identity tried, what should come of it, and what did."""
+    project, bucket, provider = env["GCP_PROJECT_ID"], env["GCP_STATE_BUCKET"], env["GCP_WORKLOAD_IDENTITY_PROVIDER"]
+    projects = "https://cloudresourcemanager.googleapis.com/v3/projects"
+    region = f"https://compute.googleapis.com/compute/v1/projects/{project}/regions/{GCP_REGION}"
+
+    def sign_in():
+        form = {
+            "audience": f"//iam.googleapis.com/{provider}",
+            "grantType": "urn:ietf:params:oauth:grant-type:token-exchange",
+            "requestedTokenType": "urn:ietf:params:oauth:token-type:access_token",
+            "scope": "https://www.googleapis.com/auth/cloud-platform",
+            "subjectToken": token,
+            "subjectTokenType": "urn:ietf:params:oauth:token-type:jwt",
+        }
+        headers = {"Content-Type": "application/json"}
+        status, _, body = send("POST", "https://sts.googleapis.com/v1/token", headers, json.dumps(form).encode())
+        if status == 200:
+            return json.loads(body)["access_token"], ALLOWED
+        found = re.search(rb'"error": *"([a-z_]{3,40})"', body)
+        return "", found.group(1).decode() if found else f"HTTP {status}"
+
+    def manage(method, url, body=None):
+        headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json", "X-Goog-User-Project": project}
+        return send(method, url, headers, body)
+
+    def may(*permissions):
+        # Google names those of the permissions that the identity has. Nothing is tried.
+        question = json.dumps({"permissions": [GCP_KNOWN, *permissions]}).encode()
+        status, _, body = manage("POST", f"{projects}/{project}:testIamPermissions", question)
+        has = json.loads(body).get("permissions", []) if status == 200 else []
+        return "no answer" if GCP_KNOWN not in has else ALLOWED if set(has) & set(permissions) else DENIED
+
+    def store(method, path, body=None):
+        return send(method, f"https://storage.googleapis.com/{path}", {"Authorization": f"Bearer {key}"}, body)
+
+    def read(owner):
+        # Opens a file that is in the list. If there is none, asks for a missing one, which may be refused too.
+        status, headers, body = store("GET", f"storage/v1/b/{bucket}/o?prefix={owner}/&maxResults=1")
+        if status != 200:
+            return gcp(status, headers, body)
+        files = json.loads(body).get("items") or [{"name": f"{owner}/{NAME}"}]
+        got = gcp(*store("GET", f"storage/v1/b/{bucket}/o/{urllib.parse.quote(files[0]['name'], safe='')}"))
+        return EMPTY if got == "notFound" else got
+
+    key, got = sign_in()
+    yield f"sign in as the plan of {repo}", ALLOWED, got
+    if got != ALLOWED:
+        return
+    status, headers, body = manage("GET", f"{projects}/{project}")
+    yield "read the project", ALLOWED, gcp(status, headers, body)
+    name = json.loads(body).get("name") if status == 200 else ""
+    yield "be in the expected project", "yes", "yes" if name == f"projects/{env['GCP_PROJECT_NUMBER']}" else "no"
+    yield "use London", ALLOWED, gcp(*manage("GET", region))
+    yield "create something", DENIED, may("compute.instances.create", "compute.networks.create", "storage.buckets.create")
+    keys = "iam.serviceAccounts.actAs", "iam.serviceAccounts.getAccessToken", "iam.serviceAccountKeys.create"
+    yield "become a service account", DENIED, may(*keys)
+    yield "change who has access", DENIED, may("resourcemanager.projects.setIamPolicy")
+    yield "read the project of the bootstrap", DENIED, gcp(*manage("GET", f"{projects}/{provider.split('/')[1]}"))
+    yield "read its own state", (ALLOWED, EMPTY), read(repo)
+    yield f"read the state of {other}", (DENIED, EMPTY), read(other)
+    yield "read the state of the bootstrap", DENIED, read("bootstrap")
+    # It may only replace a version of the file that does not exist.
+    never = f"upload/storage/v1/b/{bucket}/o?uploadType=media&name={repo}%2F{NAME}&ifGenerationMatch=1"
+    yield "write its own state", DENIED, gcp(*store("POST", never, b""))
+
+
 # Per cloud: the secrets it needs, whom GitHub's token is for, and the checks.
 CLOUDS = {
     "aws": (
@@ -234,6 +322,11 @@ CLOUDS = {
         ["AZURE_CLIENT_ID", "AZURE_STATE_ACCOUNT", "AZURE_SUBSCRIPTION_ID", "AZURE_TENANT_ID"],
         "api://AzureADTokenExchange",
         check_azure,
+    ),
+    "gcp": (
+        ["GCP_PROJECT_ID", "GCP_PROJECT_NUMBER", "GCP_STATE_BUCKET", "GCP_WORKLOAD_IDENTITY_PROVIDER"],
+        "https://iam.googleapis.com/{GCP_WORKLOAD_IDENTITY_PROVIDER}",
+        check_gcp,
     ),
 }
 
@@ -247,7 +340,7 @@ def prepare(needed, audience, env, send):
     if missing:
         raise Unusable(f"Not set: {', '.join(missing)}. Fork and Dependabot pull requests get no secrets.")
 
-    token = github_token(audience, env, send)
+    token = github_token(audience.format_map(env), env, send)
     subject = subject_of(token)
     if subject != SUBJECTS[repo]["plan"]:
         # Names and ids of a public repo. A pull request job has the subject that ends in pull_request.
