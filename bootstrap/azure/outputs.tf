@@ -19,7 +19,7 @@ output "state_bucket" {
 }
 
 output "github_secrets" {
-  description = "Input for scripts/load_secrets.py. A job in an environment gets that environment's value, any other job gets the plan identity."
+  description = "Input for scripts/load_secrets.py. A job in production or nightly-destroy gets that environment's value, any other job gets the plan identity, which only a job in plan can use."
   sensitive   = true
 
   value = {

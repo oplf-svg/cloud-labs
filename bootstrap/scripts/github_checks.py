@@ -20,6 +20,9 @@ OWNER = "oplf-svg"
 SUBJECTS = json.loads((pathlib.Path(__file__).resolve().parent.parent / "subjects.json").read_text())
 DESTROY_WORKFLOW = ".github/workflows/nightly-destroy.yml"
 
+# What each tier trusts: the environment that its subject names, and whether a person has to approve every job in it.
+ENVIRONMENTS = {"plan": ("plan", False), "apply": ("production", True), "destroy": ("nightly-destroy", False)}
+
 # GitHub turns off schedules in a public repo after 60 days without activity. Stopping at 50
 # means that any stack created today still has at least ten nights of working schedule ahead.
 MAX_QUIET_DAYS = 50
@@ -81,16 +84,11 @@ def check_environments(repo, fetch):
 
     problems = []
     prefix = f"repo:{OWNER}@{info['owner']['id']}/{repo}@{info['id']}:"
-    expected = {
-        "plan": prefix + "pull_request",
-        "apply": prefix + "environment:production",
-        "destroy": prefix + "environment:nightly-destroy",
-    }
-    if SUBJECTS[repo] != expected:
+    if SUBJECTS[repo] != {tier: f"{prefix}environment:{name}" for tier, (name, _) in ENVIRONMENTS.items()}:
         problems.append("subjects.json does not match the repo's ids")
     listing = fetch(f"/repos/{OWNER}/{repo}/environments") or {}
-    problems += environment_problems(repo, "production", listing, fetch, reviewer_wanted=True)
-    problems += environment_problems(repo, "nightly-destroy", listing, fetch, reviewer_wanted=False)
+    for name, reviewer_wanted in ENVIRONMENTS.values():
+        problems += environment_problems(repo, name, listing, fetch, reviewer_wanted)
     return problems
 
 

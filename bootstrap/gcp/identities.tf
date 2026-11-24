@@ -6,11 +6,8 @@ locals {
   ))
 
   # Tokens with any other subject are refused before IAM looks at them.
-  # Apply and destroy must also run on main, on top of the environment's own branch rule.
-  trust_condition = join(" || ", [
-    "assertion.sub in ${jsonencode(local.tier_subjects.plan)}",
-    "(assertion.sub in ${jsonencode(concat(local.tier_subjects.apply, local.tier_subjects.destroy))} && assertion.ref == \"refs/heads/main\")",
-  ])
+  # They must also come from main, on top of the environment's own branch rule.
+  trust_condition = "assertion.sub in ${jsonencode(sort([for id in local.identities : id.subject]))} && assertion.ref == \"refs/heads/main\""
 }
 
 resource "google_iam_workload_identity_pool" "github" {

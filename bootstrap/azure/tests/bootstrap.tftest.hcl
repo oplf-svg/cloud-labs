@@ -42,7 +42,7 @@ variables {
     cloud-labs         = 1469385611
   }
   suffixes = {
-    plan    = "pull_request"
+    plan    = "environment:plan"
     apply   = "environment:production"
     destroy = "environment:nightly-destroy"
   }
@@ -69,6 +69,11 @@ run "trust" {
       c.issuer == "https://token.actions.githubusercontent.com" && c.audience == tolist(["api://AzureADTokenExchange"]) && !strcontains(c.subject, "*")
     ])
     error_message = "Credentials must use GitHub's issuer, the Entra audience and no wildcards."
+  }
+
+  assert {
+    condition     = alltrue([for c in azurerm_federated_identity_credential.ci : can(regex(":environment:(plan|production|nightly-destroy)$", c.subject))])
+    error_message = "Only jobs in one of the three environments may be trusted, so never a pull request."
   }
 
   assert {

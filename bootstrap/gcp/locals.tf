@@ -6,7 +6,7 @@ locals {
 
   # What each tier's subject must end with. Anything else stops the plan.
   subject_suffix = {
-    plan    = "pull_request"
+    plan    = "environment:plan"
     apply   = "environment:production"
     destroy = "environment:nightly-destroy"
   }

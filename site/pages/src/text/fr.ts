@@ -45,7 +45,7 @@ export const fr: SiteWords = {
   },
   score: {
     title: "La dernière exécution, cloud par cloud",
-    lead: "Une pull request se connecte avec une identité en lecture seule et tente ce qu'elle ne doit pas pouvoir faire.",
+    lead: "Une identité en lecture seule se connecte et tente ce qu'elle ne doit pas pouvoir faire.",
     cloud: "Cloud", checks: "Contrôles", in: "Accordé", refused: "Refusé", empty: "Rien à ouvrir", wrong: "Mauvaises réponses", answer: "Réponse", open: "Ouvrir l'exécution",
     verdict: (checks, wrong) => `${checks} contrôles, ${wrong === 0 ? "aucune mauvaise réponse" : wrong === 1 ? "1 mauvaise réponse" : `${wrong} mauvaises réponses`}`,
     note: "« Rien à ouvrir » n'est pas une réussite. Aucun projet n'a encore rien stocké, donc ce contrôle ne peut pas prouver qui pourrait l'ouvrir.",
@@ -84,7 +84,7 @@ export const fr: SiteWords = {
       title: "Personne ne détient les clés",
       text: ["GitHub se connecte à chaque cloud avec un jeton qui dure quelques minutes. Aucun mot de passe ni aucune clé de cloud n'est stocké dans GitHub. Chaque projet a trois identités sur chaque cloud, et aucune ne peut faire le travail d'une autre."],
       tiers: [
-        { name: "Plan", who: "Les pull requests", can: "Regarde, et ne peut rien changer", state: "tested" },
+        { name: "Plan", who: "La branche principale, d'elle-même", can: "Regarde, et ne peut rien changer", state: "tested" },
         { name: "Apply", who: "La branche principale, après mon approbation", can: "Déploie, mais ne peut pas distribuer de droits", state: "used" },
         { name: "Destroy", who: "Chaque nuit, seule", can: "Supprime, et ne peut rien créer", state: "tested" },
       ],

@@ -15,7 +15,7 @@ import check_sign_in as checks
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 REPO, OTHER = "cloud-labs", "webhook-platform"
-SUBJECT = "repo:oplf-svg@228823995/cloud-labs@1469385611:pull_request"
+SUBJECT = "repo:oplf-svg@228823995/cloud-labs@1469385611:environment:plan"
 
 ACCOUNT, BUCKET = "111122223333", "tfstate-0a1b2c3d"
 ROLES = f"arn:aws:iam::{ACCOUNT}:role/github-actions"
@@ -581,7 +581,7 @@ class Preparation(Base):
     def test_missing_secrets(self):
         for cloud, (needed, _, _) in checks.CLOUDS.items():
             self.assert_not_checked(
-                f"Not set: {', '.join(needed)}. Fork and Dependabot pull requests get no secrets.",
+                f"Not set: {', '.join(needed)}.",
                 env=ENV | dict.fromkeys(needed, ""),
                 cloud=cloud,
             )
@@ -597,7 +597,11 @@ class Preparation(Base):
 
     def test_another_subject(self):
         for sent, shown in (
-            ("repo:oplf-svg/cloud-labs:pull_request", "repo:oplf-svg/cloud-labs:pull_request"),
+            # What a pull request's job has, and a job on main without an environment.
+            (SUBJECT.replace("environment:plan", "pull_request"), SUBJECT.replace("environment:plan", "pull_request")),
+            (SUBJECT.replace("environment:plan", "ref:refs/heads/main"), SUBJECT.replace("environment:plan", "ref:refs/heads/main")),
+            (checks.SUBJECTS[REPO]["apply"], checks.SUBJECTS[REPO]["apply"]),
+            ("repo:oplf-svg/cloud-labs:environment:plan", "repo:oplf-svg/cloud-labs:environment:plan"),
             ("repo:x:ref:refs/heads/a b\n::add", "repo:x:ref:refs/heads/a?b?::add"),
         ):
             message = f"GitHub's subject is {shown}, not the one in subjects.json."
@@ -653,6 +657,22 @@ class Workflow(unittest.TestCase):
             self.assertEqual(sorted(used), sorted((name, name) for name in needed))
             self.assertEqual(jobs[cloud].count("{{ secrets."), len(needed))
             self.assertIn(f"run: python3 bootstrap/scripts/check_sign_in.py {cloud}\n", jobs[cloud])
+            self.assertIn("\n    environment: plan\n", jobs[cloud])
+
+    def test_runs_on_main_only(self):
+        starts = self.text.partition("\non:\n")[2].partition("\npermissions:")[0]
+        self.assertEqual(
+            starts.split("\n"),
+            [
+                "  push:",
+                "    branches: [main]",
+                "    paths:",
+                "      - bootstrap/**",
+                "      - .github/workflows/sign-in.yml",
+                "  workflow_dispatch:",
+                "",
+            ],
+        )
 
     def test_uses_only_the_action_that_ci_uses(self):
         used = set(re.findall(r"uses: (\S+)", self.text))

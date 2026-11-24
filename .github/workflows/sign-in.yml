@@ -1,27 +1,27 @@
 name: sign-in
 
-# Signs in to each cloud as a pull request does, and checks where the plan identity's rights end. Only a
-# pull request can: that identity trusts no other subject, so there is no manual or scheduled trigger.
-# It is not a required check, so that a cloud's bad day cannot block a merge.
+# Signs in to each cloud as the identity that can only look, and checks where its rights end. The environment allows main
+# only, so nothing runs here before a person has approved it. What it does stands in check_sign_in.py and not here, because
+# agents may not change a workflow file.
 on:
-  pull_request:
+  push:
+    branches: [main]
     paths:
       - bootstrap/**
       - .github/workflows/sign-in.yml
+  workflow_dispatch:
 
 permissions: {}
 
 concurrency:
-  group: sign-in-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  group: sign-in
 
 # Each job names its own cloud's secrets and no others. GitHub hides a value only in jobs that use it.
 jobs:
   aws:
-    # A pull request from a fork gets no token, and one from a fork or from Dependabot gets no secrets.
-    if: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    environment: plan
     permissions:
       contents: read
       id-token: write
@@ -36,9 +36,9 @@ jobs:
       - run: python3 bootstrap/scripts/check_sign_in.py aws
 
   azure:
-    if: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    environment: plan
     permissions:
       contents: read
       id-token: write
@@ -54,9 +54,9 @@ jobs:
       - run: python3 bootstrap/scripts/check_sign_in.py azure
 
   gcp:
-    if: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    environment: plan
     permissions:
       contents: read
       id-token: write

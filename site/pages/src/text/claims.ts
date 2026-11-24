@@ -31,9 +31,9 @@ export const CLAIMS: Claim[] = [
   {
     id: "look-only", doors: ["cloud", "security", "agents"], project: "cloud-labs", status: "proven",
     claim: {
-      en: "A pull request can look around in the clouds, but it cannot create anything or write state.",
-      es: "Un pull request puede mirar en las nubes, pero no puede crear nada ni escribir estado.",
-      fr: "Une pull request peut regarder dans les clouds, mais ne peut rien créer ni écrire d'état.",
+      en: "The read-only identity can look around in the clouds, but it cannot create anything or write state.",
+      es: "La identidad de solo lectura puede mirar en las nubes, pero no puede crear nada ni escribir estado.",
+      fr: "L'identité en lecture seule peut regarder dans les clouds, mais ne peut rien créer ni écrire d'état.",
     },
     limit: {
       en: "One kind of creation is tried on each cloud, not all of them.",
@@ -45,14 +45,14 @@ export const CLAIMS: Claim[] = [
   {
     id: "no-borrowing", doors: ["security", "cloud", "agents"], project: "cloud-labs", status: "proven",
     claim: {
-      en: "A pull request cannot borrow the identity that deploys.",
-      es: "Un pull request no puede tomar prestada la identidad que despliega.",
-      fr: "Une pull request ne peut pas emprunter l'identité qui déploie.",
+      en: "The read-only identity cannot borrow the one that deploys.",
+      es: "La identidad de solo lectura no puede tomar prestada la que despliega.",
+      fr: "L'identité en lecture seule ne peut pas emprunter celle qui déploie.",
     },
     limit: {
-      en: "Tried on AWS and on Google Cloud. On Azure a pull request does not know the other identities, so it cannot even try.",
-      es: "Intentado en AWS y en Google Cloud. En Azure un pull request no conoce las otras identidades, así que ni siquiera puede intentarlo.",
-      fr: "Tenté sur AWS et sur Google Cloud. Sur Azure, une pull request ne connaît pas les autres identités, donc elle ne peut même pas essayer.",
+      en: "Tried on AWS and on Google Cloud. On Azure it does not know the other identities, so it cannot even try.",
+      es: "Intentado en AWS y en Google Cloud. En Azure no conoce las otras identidades, así que ni siquiera puede intentarlo.",
+      fr: "Tenté sur AWS et sur Google Cloud. Sur Azure, elle ne connaît pas les autres identités, donc elle ne peut même pas essayer.",
     },
     evidence: [RUN, SCRIPT],
   },

@@ -19,7 +19,8 @@ import sys
 OWNER = "oplf-svg"
 REPOS = list(json.loads((pathlib.Path(__file__).resolve().parent.parent / "subjects.json").read_text()))
 
-# Where a secret goes, and whose identity a job gets there. A job without an environment gets plan.
+# Where a secret goes, and whose identity a job gets there. The environment plan has no secrets of its own,
+# so its jobs get those of the repo.
 TIERS = {"repository": "plan", "production": "apply", "nightly-destroy": "destroy"}
 
 GUID = "[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}"

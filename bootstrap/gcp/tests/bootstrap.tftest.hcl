@@ -67,7 +67,7 @@ variables {
     cloud-labs         = 1469385611
   }
   suffixes = {
-    plan    = "pull_request"
+    plan    = "environment:plan"
     apply   = "environment:production"
     destroy = "environment:nightly-destroy"
   }
@@ -95,14 +95,20 @@ run "trust" {
   }
 
   assert {
-    condition = google_iam_workload_identity_pool_provider.github.attribute_condition == join(" || ", [
-      "assertion.sub in ${jsonencode(sort([for repo, id in var.repo_ids : "repo:oplf-svg@228823995/${repo}@${id}:pull_request"]))}",
-      "(assertion.sub in ${jsonencode(concat(
-        sort([for repo, id in var.repo_ids : "repo:oplf-svg@228823995/${repo}@${id}:environment:production"]),
-        sort([for repo, id in var.repo_ids : "repo:oplf-svg@228823995/${repo}@${id}:environment:nightly-destroy"]),
-      ))} && assertion.ref == \"refs/heads/main\")",
+    condition = google_iam_workload_identity_pool_provider.github.attribute_condition == join(" && ", [
+      "assertion.sub in ${jsonencode(sort(flatten([
+        for repo, id in var.repo_ids : [for suffix in values(var.suffixes) : "repo:oplf-svg@228823995/${repo}@${id}:${suffix}"]
+      ])))}",
+      "assertion.ref == \"refs/heads/main\"",
     ])
-    error_message = "Apply and destroy must also require the main branch."
+    error_message = "Every subject must also require the main branch."
+  }
+
+  assert {
+    condition = alltrue([
+      for s in flatten(regexall("\"(repo:[^\"]+)\"", google_iam_workload_identity_pool_provider.github.attribute_condition)) : can(regex(":environment:(plan|production|nightly-destroy)$", s))
+    ])
+    error_message = "Only jobs in one of the three environments may be trusted, so never a pull request."
   }
 
   assert {
