@@ -1,0 +1,19 @@
+{
+  "deploy": [
+    "bigquery",
+    "cloudasset",
+    "cloudresourcemanager",
+    "cloudscheduler",
+    "compute",
+    "container",
+    "iam",
+    "logging",
+    "monitoring",
+    "pubsub",
+    "run",
+    "secretmanager",
+    "serviceusage",
+    "sqladmin",
+    "storage"
+  ]
+}

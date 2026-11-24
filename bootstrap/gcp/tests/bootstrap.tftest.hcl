@@ -102,7 +102,7 @@ run "trust" {
       && toset(keys(local.tier_principals)) == toset(["plan", "apply", "destroy"])
       && alltrue([
         for m in concat(
-          [for m in concat(values(google_project_iam_member.apply), values(google_project_iam_member.read), [google_project_iam_member.delete, google_project_iam_member.apply_service_accounts, google_project_iam_member.apply_grants, google_project_iam_member.apply_more_grants, google_project_iam_member.census]) : m.member],
+          [for m in concat(values(google_project_iam_member.apply), values(google_project_iam_member.read), [google_project_iam_member.delete, google_project_iam_member.apply_service_accounts, google_project_iam_member.apply_grants, google_project_iam_member.apply_more_grants, google_project_iam_member.apply_services, google_project_iam_member.census]) : m.member],
           [google_bigquery_dataset_iam_member.cost.member], [for m in values(google_logging_log_view_iam_member.apply) : m.member],
           flatten([for b in jsondecode(google_storage_bucket_iam_policy.state.policy_data).bindings : b.members]),
         ) : !strcontains(m, "/*") && !strcontains(m, "attribute.tier/none") && (!strcontains(m, "/attribute.") || can(regex("/attribute[.]tier/(plan|apply|destroy)$", m)))
@@ -227,7 +227,7 @@ run "permissions" {
 
   assert {
     condition = alltrue([
-      for m in concat(values(google_project_iam_member.apply), [google_project_iam_member.apply_service_accounts, google_project_iam_member.apply_grants, google_project_iam_member.apply_more_grants]) :
+      for m in concat(values(google_project_iam_member.apply), [google_project_iam_member.apply_service_accounts, google_project_iam_member.apply_grants, google_project_iam_member.apply_more_grants, google_project_iam_member.apply_services]) :
       m.member == "principalSet://iam.googleapis.com/projects/123456789012/locations/global/workloadIdentityPools/github-actions/attribute.tier/apply"
     ])
     error_message = "Deploy rights belong to the apply tier only."
@@ -252,7 +252,7 @@ run "permissions" {
 
   assert {
     condition = alltrue([
-      for m in concat(values(google_project_iam_member.apply), values(google_project_iam_member.read), [google_project_iam_member.delete, google_project_iam_member.apply_service_accounts, google_project_iam_member.apply_grants, google_project_iam_member.apply_more_grants, google_project_iam_member.census]) :
+      for m in concat(values(google_project_iam_member.apply), values(google_project_iam_member.read), [google_project_iam_member.delete, google_project_iam_member.apply_service_accounts, google_project_iam_member.apply_grants, google_project_iam_member.apply_more_grants, google_project_iam_member.apply_services, google_project_iam_member.census]) :
       m.project == "example-project-1"
     ])
     error_message = "No pipeline may have a project role in the bootstrap project."
@@ -293,6 +293,42 @@ run "logs" {
       toset(["roles/logging.admin", "roles/logging.fieldAccessor", "roles/logging.linkViewer", "roles/logging.privateLogViewer", "roles/logging.viewAccessor", "roles/logging.viewer"]),
     )) == 0
     error_message = "No role on the project may read logs."
+  }
+}
+
+run "services" {
+  command = apply
+
+  # Apply turns no service on or off. These are all of Google's roles that could, by its own page of 24 November 2026.
+  assert {
+    condition = length(setintersection(
+      toset(concat(local.apply_roles, local.grantable_roles, local.more_grantable_roles)),
+      toset(["roles/admin", "roles/assuredoss.admin", "roles/assuredoss.projectAdmin", "roles/commercebusinessenablement.admin", "roles/consumerprocurement.entitlementManager", "roles/consumerprocurement.procurementAdmin", "roles/editor", "roles/iam.dataScientist", "roles/iam.databasesAdmin", "roles/iam.devOps", "roles/iam.infrastructureAdmin", "roles/iam.networkAdmin", "roles/iam.siteReliabilityEngineer", "roles/monitoring.admin", "roles/monitoring.editor", "roles/owner", "roles/securitycenter.admin", "roles/servicemanagement.quotaAdmin", "roles/serviceusage.serviceUsageAdmin", "roles/stackdriver.accounts.editor", "roles/telcoautomation.admin", "roles/writer"]),
+    )) == 0
+    error_message = "A role of apply can turn services on or off."
+  }
+
+  assert {
+    condition = (
+      google_project_iam_custom_role.services.permissions == toset(["serviceusage.services.get", "serviceusage.services.list", "serviceusage.services.use"])
+      && google_project_iam_custom_role.services.project == "example-project-1"
+      && google_project_iam_member.apply_services.role == google_project_iam_custom_role.services.id
+    )
+    error_message = "Apply may see which services are on, and nothing more."
+  }
+
+  # No pipeline may turn one on or off in any other way either.
+  assert {
+    condition = alltrue([
+      for p in concat(tolist(local.read_permissions), tolist(local.delete_permissions), tolist(local.service_account_permissions)) : !can(regex("^serviceusage[.](services[.](enable|disable)|consumerpolicy[.]update|quotas[.]update|mcppolicy[.]update)$|^cloudquotas[.]quotas[.]update$", p))
+    ])
+    error_message = "A custom role can turn services on or off."
+  }
+
+  # What a stack may use. A model service, a key service or a network that is paid by the hour is not among them.
+  assert {
+    condition     = local.services == ["bigquery", "cloudasset", "cloudresourcemanager", "cloudscheduler", "compute", "container", "iam", "logging", "monitoring", "pubsub", "run", "secretmanager", "serviceusage", "sqladmin", "storage"]
+    error_message = "The list of services is not the agreed one."
   }
 }
 
@@ -343,7 +379,7 @@ run "cost" {
   assert {
     condition = alltrue([
       for m in concat(
-        [for m in concat(values(google_project_iam_member.apply), values(google_project_iam_member.read), [google_project_iam_member.delete, google_project_iam_member.apply_service_accounts, google_project_iam_member.apply_grants, google_project_iam_member.apply_more_grants, google_project_iam_member.census]) : m.member],
+        [for m in concat(values(google_project_iam_member.apply), values(google_project_iam_member.read), [google_project_iam_member.delete, google_project_iam_member.apply_service_accounts, google_project_iam_member.apply_grants, google_project_iam_member.apply_more_grants, google_project_iam_member.apply_services, google_project_iam_member.census]) : m.member],
         [for m in values(google_logging_log_view_iam_member.apply) : m.member],
         flatten([for b in jsondecode(google_storage_bucket_iam_policy.state.policy_data).bindings : b.members]),
       ) : !strcontains(m, "environment:cost")

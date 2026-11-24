@@ -14,7 +14,7 @@ import time
 import unittest
 
 BOOTSTRAP = pathlib.Path(__file__).resolve().parent.parent
-EXPECTED = {"aws": 106, "azure": 97, "gcp": 55}
+EXPECTED = {"aws": 106, "azure": 97, "gcp": 59}
 SUBJECTS = [s for file in ("subjects.json", "cost.json") for some in json.loads((BOOTSTRAP / file).read_text()).values() for s in some.values()]
 
 TERRAFORM = r"""#!/usr/bin/env python3
@@ -82,7 +82,13 @@ elif tool == "az":
 elif tool == "gcloud":
     if "billing projects describe" in line: say(conf.get("billing", "True"))
     elif "services enable" in line or "service-accounts describe" in line: pass
-    elif "projects describe" in line: say("210987654321")
+    elif "projects describe" in line: say("123456789012" if "example-bootstrap-1" in line else "210987654321")
+    elif "remove-iam-policy-binding" in line and "principalSet" in line:
+        if conf.get("keeps_roles"): sys.exit("PERMISSION_DENIED")
+        with open(box / "lost", "a") as lost: print(args[args.index("--condition=None") + 1].removeprefix("--role="), file=lost)
+    elif "get-iam-policy" in line and "--format=json" in line:
+        lost = (box / "lost").read_text().split() if (box / "lost").exists() else []
+        say(json.dumps({"bindings": [binding for binding in conf.get("bindings", []) if binding["role"] not in lost], "etag": "x", "version": 3}))
     elif "remove-iam-policy-binding" in line: (box / "stripped").write_text("yes")
     elif "get-iam-policy" in line:
         say("user:owner@example.com\nserviceAccount:210987654321@cloudservices.gserviceaccount.com")
@@ -360,8 +366,47 @@ class Run(unittest.TestCase):
         self.assertEqual(self.go("gcp"), 0, self.out)
         enabled = [line for line in self.log().splitlines() if "services enable" in line]
         self.assertEqual(len(enabled), 2)
-        for name, project in (("bigquery", "example-bootstrap-1"), ("cloudasset", "example-project-1")):
-            self.assertEqual([line.endswith(f"--project {project}") for line in enabled if f"{name}.googleapis.com" in line], [True])
+        self.assertIn("bigquery.googleapis.com", enabled[0])
+        self.assertTrue(enabled[0].endswith("--project example-bootstrap-1"), enabled[0])
+        listed = json.loads((BOOTSTRAP / "gcp" / "services.json").read_text())["deploy"]
+        self.assertEqual(enabled[1].split(), ["gcloud", "services", "enable", *(f"{name}.googleapis.com" for name in listed), "--project", "example-project-1"])
+
+    def test_google_takes_three_roles_from_apply(self):
+        tiers = "principalSet://iam.googleapis.com/projects/123456789012/locations/global/workloadIdentityPools/github-actions/attribute.tier"
+        three = ("roles/cloudkms.admin", "roles/monitoring.editor", "roles/serviceusage.serviceUsageAdmin")
+        held = [{"role": role, "members": ["user:owner@example.com", f"{tiers}/apply"]} for role in ("roles/run.admin", *three)]
+        removed = [f"gcloud projects remove-iam-policy-binding example-project-1 --condition=None --role={role} --member={tiers}/apply" for role in three]
+
+        def lines():
+            return [line for line in self.log().splitlines() if "remove-iam-policy-binding" in line and "principalSet" in line]
+
+        self.assertEqual(self.go("gcp", bindings=held), 0, self.out)
+        self.assertEqual(lines(), removed)
+        # And Editor from the account that Google makes in the project of the repos.
+        self.assertIn("gcloud projects remove-iam-policy-binding example-project-1 --condition=None --role=roles/editor --member=serviceAccount:210987654321-compute@developer.gserviceaccount.com\n", self.log())
+        # Before the plan, or it would stop at three deletions.
+        self.assertLess(self.log().index(removed[-1]), self.log().index("terraform plan"))
+        # The next time there is nothing to take.
+        (self.box / "log").unlink()
+        self.assertEqual(self.go("gcp", bindings=held, bucket="tfstate-0a1b2c3d"), 0, self.out)
+        self.assertEqual(lines(), [])
+
+    def test_google_takes_nothing_from_others(self):
+        tiers = "principalSet://iam.googleapis.com/projects/123456789012/locations/global/workloadIdentityPools/github-actions/attribute.tier"
+        others = [{"role": "roles/monitoring.editor", "members": [f"{tiers}/plan", "user:owner@example.com"]}]
+        others += [{"role": "roles/cloudkms.admin", "members": [f"{tiers}/apply"], "condition": {"title": "x", "expression": "true"}}]
+        for bindings in (others, []):
+            self.setUp()
+            self.assertEqual(self.go("gcp", bindings=bindings), 0, self.out)
+            self.assertNotIn("principalSet", self.log())
+
+    def test_google_keeps_the_roles(self):
+        tiers = "principalSet://iam.googleapis.com/projects/123456789012/locations/global/workloadIdentityPools/github-actions/attribute.tier"
+        self.assertEqual(self.go("gcp", bindings=[{"role": "roles/monitoring.editor", "members": [f"{tiers}/apply"]}], keeps_roles=True), 1)
+        self.assertIn("STOPPED: Google did not take roles/monitoring.editor away from apply. Run the same command again.", self.out)
+        self.assertIn("PERMISSION_DENIED", self.out)
+        self.assertNotIn("terraform plan", self.log())
+        self.assertFalse(self.applied())
 
     def test_bucket_without_state(self):
         for cloud in self.each_cloud():

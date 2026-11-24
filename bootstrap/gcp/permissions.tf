@@ -4,7 +4,10 @@ locals {
 
   # Deploy rights, service by service. Left out on purpose: the basic roles, roles that can buy
   # commitments (Compute Admin, BigQuery Admin, Vertex AI Admin), roles that can run Cloud Build
-  # as the default service account (Dataflow), and roles that can change the trust or create keys.
+  # as the default service account (Dataflow), roles that can change the trust or create keys, and
+  # roles that can turn services on or off (Monitoring Editor is one). Which ones are on stands in
+  # services.json, and run.sh turns them on: what is off cannot be used, and what is turned off
+  # cannot be asked about.
   apply_roles = [
     "roles/aiplatform.user",
     "roles/apigateway.admin",
@@ -13,7 +16,6 @@ locals {
     "roles/bigquery.jobUser",
     "roles/certificatemanager.editor",
     "roles/cloudfunctions.admin",
-    "roles/cloudkms.admin",
     "roles/cloudscheduler.admin",
     "roles/cloudsql.admin",
     "roles/cloudtasks.admin",
@@ -27,13 +29,16 @@ locals {
     "roles/eventarc.admin",
     "roles/iam.serviceAccountUser",
     "roles/logging.configWriter",
-    "roles/monitoring.editor",
+    "roles/monitoring.alertPolicyEditor",
+    "roles/monitoring.dashboardEditor",
+    "roles/monitoring.notificationChannelEditor",
+    "roles/monitoring.uptimeCheckConfigEditor",
+    "roles/monitoring.viewer",
     "roles/pubsub.admin",
     "roles/redis.admin",
     "roles/run.admin",
     "roles/secretmanager.admin",
     "roles/servicenetworking.networksAdmin",
-    "roles/serviceusage.serviceUsageAdmin",
     "roles/storage.admin",
     "roles/vpcaccess.admin",
     "roles/workflows.admin",
@@ -297,6 +302,28 @@ resource "google_project_iam_member" "apply_more_grants" {
     description = "May grant or revoke one role, with which a workload signs in to a database without a password."
     expression  = local.only_more_grantable
   }
+
+  depends_on = [google_iam_workload_identity_pool_provider.github]
+}
+
+locals {
+  # run.sh turns them on, and the night compares. Here only for the tests.
+  services = jsondecode(file("${path.module}/services.json"))["deploy"]
+}
+
+# Sees which services are on, and has its calls counted against the project. Turns none on or off.
+resource "google_project_iam_custom_role" "services" {
+  project     = var.project_id
+  role_id     = "ghaServices"
+  title       = "GitHub Actions services"
+  description = "Sees which services are on. Turns none on or off."
+  permissions = ["serviceusage.services.get", "serviceusage.services.list", "serviceusage.services.use"]
+}
+
+resource "google_project_iam_member" "apply_services" {
+  project = var.project_id
+  role    = google_project_iam_custom_role.services.id
+  member  = local.tier_principals["apply"]
 
   depends_on = [google_iam_workload_identity_pool_provider.github]
 }

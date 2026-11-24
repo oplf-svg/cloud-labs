@@ -20,7 +20,7 @@ cloud=${1:-}
 case "$cloud" in
   aws) expected=106 ;;
   azure) expected=97 ;;
-  gcp) expected=55 ;;
+  gcp) expected=59 ;;
   *)
     echo "usage: run.sh aws | azure | gcp" >&2
     exit 2
@@ -234,7 +234,7 @@ gcp_last() {
 }
 
 gcp_setup() {
-  local project number account
+  local project number account apply policy role
   TF_VAR_project_id=${TF_VAR_project_id:-$(ask "Id of the project that the repos deploy into: ")}
   TF_VAR_bootstrap_project_id=${TF_VAR_bootstrap_project_id:-$(ask "Id of the other, empty project for the trust and the state: ")}
   export TF_VAR_project_id TF_VAR_bootstrap_project_id
@@ -247,9 +247,11 @@ gcp_setup() {
   done
   where="Google Cloud projects $TF_VAR_project_id and $TF_VAR_bootstrap_project_id"
 
-  confirm "This turns on the Google APIs the bootstrap needs, and takes the Editor role away from the default service account of $TF_VAR_project_id." || stop "Nothing was changed."
+  confirm "This turns on the Google APIs in services.json, and takes away in $TF_VAR_project_id: the Editor role of the default service account, and three roles of apply that it no longer has." || stop "Nothing was changed."
   gcloud services enable bigquery.googleapis.com cloudresourcemanager.googleapis.com iam.googleapis.com storage.googleapis.com sts.googleapis.com --project "$TF_VAR_bootstrap_project_id"
-  gcloud services enable cloudasset.googleapis.com cloudresourcemanager.googleapis.com compute.googleapis.com iam.googleapis.com logging.googleapis.com serviceusage.googleapis.com --project "$TF_VAR_project_id"
+  # All that a stack may use: apply can turn on nothing else.
+  # shellcheck disable=SC2046
+  gcloud services enable $(jq -r '.deploy[] + ".googleapis.com"' services.json) --project "$TF_VAR_project_id"
   number=$(gcloud projects describe "$TF_VAR_project_id" --format='value(projectNumber)')
   account="$number-compute@developer.gserviceaccount.com"
   # Compute Engine creates it, and its Editor role, a moment after being turned on.
@@ -259,6 +261,17 @@ gcp_setup() {
   done
   gcloud projects remove-iam-policy-binding "$TF_VAR_project_id" --condition=None --role=roles/editor \
     --member="serviceAccount:$account" > /dev/null 2>&1 || true
+  # Terraform counts a role that is no longer granted as a deletion, and this script stops at every deletion. So it takes
+  # them away itself. The next time it finds nothing to take.
+  number=$(gcloud projects describe "$TF_VAR_bootstrap_project_id" --format='value(projectNumber)')
+  apply="principalSet://iam.googleapis.com/projects/$number/locations/global/workloadIdentityPools/${TF_VAR_pool_id:-github-actions}/attribute.tier/apply"
+  policy=$(gcloud projects get-iam-policy "$TF_VAR_project_id" --format=json)
+  for role in roles/cloudkms.admin roles/monitoring.editor roles/serviceusage.serviceUsageAdmin; do
+    if jq -e --arg role "$role" --arg member "$apply" 'any(.bindings[]; .role == $role and (has("condition") | not) and any(.members[]; . == $member))' <<< "$policy" > /dev/null; then
+      gcloud projects remove-iam-policy-binding "$TF_VAR_project_id" --condition=None --role="$role" --member="$apply" > /dev/null ||
+        stop "Google did not take $role away from apply. Run the same command again."
+    fi
+  done
   gcp_last
 
   bucket=$(gcloud storage buckets list --project "$TF_VAR_bootstrap_project_id" --filter='name~^tfstate-' --format='value(name)' | head -n 1)
