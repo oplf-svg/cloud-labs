@@ -144,10 +144,15 @@ class FakeWeb:
             prefix = urllib.parse.parse_qs(parts.query)["prefix"][0]
             items = [{"name": name} for name in self.files if name.startswith(prefix)]
             return 200, {}, json.dumps({"kind": "storage#objects"} | ({"items": items} if items else {})).encode()
-        name = urllib.parse.unquote(parts.path.removeprefix(f"/storage/v1/b/{GOOGLE_BUCKET}/o/"))
-        if method != "GET" or not name.startswith(f"{self.repo}/"):
-            return no_google(403, "forbidden")
-        return (200, {}, b"{}") if name in self.files else no_google(404, "notFound")
+        # As S3 does: whoever may list the bucket hears that a file is missing, whatever they may open.
+        name = parts.path.removeprefix(f"/storage/v1/b/{GOOGLE_BUCKET}/o/")
+        # Google takes a slash for the end of the name, so it has to be encoded.
+        assert method != "GET" or "/" not in name
+        name = urllib.parse.unquote(name)
+        if method == "GET" and name not in self.files:
+            return no_google(404, "notFound")
+        own = method == "GET" and name.startswith(f"{self.repo}/")
+        return (200, {}, b"{}") if own else no_google(403, "forbidden")
 
     def __call__(self, method, url, headers=None, body=None):
         self.requests.append((method, url, headers or {}, body))
@@ -425,7 +430,7 @@ class Google(Base):
                 "ok   change who has access: denied",
                 "ok   read the project of the bootstrap: denied",
                 "ok   read its own state: nothing there",
-                "ok   read the state of webhook-platform: denied",
+                "ok   read the state of webhook-platform: nothing there",
                 "ok   read the state of the bootstrap: denied",
                 "ok   write its own state: denied",
             ],
@@ -439,10 +444,13 @@ class Google(Base):
         self.assertIn("ok   read the state of webhook-platform: denied\n", output)
         self.assert_private(output)
 
-    def test_a_missing_file_of_another_repo_may_also_be_reported_missing(self):
-        status, output = run("gcp", web=FakeWeb({f"/o/{OTHER}": no_google(404, "notFound")}))
-        self.assertEqual(status, 0)
-        self.assertIn("ok   read the state of webhook-platform: nothing there\n", output)
+    def test_there_is_always_a_state_of_the_bootstrap(self):
+        result = run("gcp", web=FakeWeb(files=()))
+        self.assert_fails_only(result, "FAIL read the state of the bootstrap: nothing there, should be denied")
+
+    def test_a_list_that_fails_is_not_taken_for_an_empty_one(self):
+        result = run("gcp", web=FakeWeb({f"prefix={OTHER}/": no_google(429, "rateLimitExceeded")}))
+        self.assert_fails_only(result, "FAIL read the state of webhook-platform: rateLimitExceeded, should be denied")
 
     def test_fails_on_a_right_too_many(self):
         cases = {

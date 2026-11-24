@@ -106,8 +106,8 @@ do. It must be able to look around and to read its own state. It must be refused
 state, or reads what belongs to another repo or to the bootstrap, on AWS when it asks for another role, and on Google
 Cloud when it wants to act as a service account or change who has access.
 
-On AWS only a file that exists can show who may open it. S3 says that a file is missing to everyone who may list the
-bucket, whatever they may open. So as long as a repo has no state, its line can say `nothing there`.
+On AWS and Google Cloud only a file that exists can show who may open it. Both say that a file is missing to everyone
+who may list the bucket, whatever they may open. So as long as a repo has no state, its line says `nothing there`.
 
 Nothing is changed, even if a right turns out to be too wide: every write is a dry run, a validation, a question about a
 permission, or the replacement of a file that does not exist. The log is public, so it shows the script's own words and

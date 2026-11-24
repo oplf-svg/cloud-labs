@@ -281,13 +281,14 @@ def check_gcp(repo, other, token, env, run, send):
         return send(method, f"https://storage.googleapis.com/{path}", {"Authorization": f"Bearer {key}"}, body)
 
     def read(owner):
-        # Opens a file that is in the list. If there is none, asks for a missing one, which may be refused too.
+        # Opens a file that is in the list, because a missing one tells nothing here either.
         status, headers, body = store("GET", f"storage/v1/b/{bucket}/o?prefix={owner}/&maxResults=1")
         if status != 200:
             return gcp(status, headers, body)
-        files = json.loads(body).get("items") or [{"name": f"{owner}/{NAME}"}]
-        got = gcp(*store("GET", f"storage/v1/b/{bucket}/o/{urllib.parse.quote(files[0]['name'], safe='')}"))
-        return EMPTY if got == "notFound" else got
+        files = json.loads(body).get("items")
+        if not files:
+            return EMPTY
+        return gcp(*store("GET", f"storage/v1/b/{bucket}/o/{urllib.parse.quote(files[0]['name'], safe='')}"))
 
     key, got = sign_in()
     yield f"sign in as the plan of {repo}", ALLOWED, got
