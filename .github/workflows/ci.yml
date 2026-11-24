@@ -62,6 +62,23 @@ jobs:
       - run: python3 -m unittest discover --start-directory bootstrap/scripts
       - run: python3 -m unittest discover --start-directory .github/scripts
 
+  # Whatever else can be checked without a cloud. What that is stands in scripts and not here, because agents may not
+  # change a workflow file.
+  more:
+    needs: blocked-terms
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+      - run: bash .github/scripts/more_checks.sh
+
   blocked-terms:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -94,7 +111,7 @@ jobs:
   # only" would reuse a blocked-terms result from before the title was edited, so it fails here.
   ci:
     if: ${{ always() }}
-    needs: [blocked-terms, terraform, scripts]
+    needs: [blocked-terms, terraform, scripts, more]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -105,7 +122,7 @@ jobs:
         run: |
           jq --raw-output 'to_entries[] | "\(.key): \(.value.result)"' <<< "$RESULTS"
           jq --exit-status --arg attempt "$ATTEMPT" '
-            length == 3
+            length == 4
             and all(.[]; .result == "success")
             and ."blocked-terms".outputs.attempt == $attempt
           ' <<< "$RESULTS" > /dev/null

@@ -1,0 +1,68 @@
+name: nightly-destroy
+
+# Every night, as the identity that can only delete: looks for Terraform state that nobody declared, and checks where that
+# identity's rights end. What it does stands in night.py and not here, because agents may not change a workflow file.
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: nightly-destroy
+
+# The environment allows main only. Each job names its own cloud's secrets and no others.
+jobs:
+  aws:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: nightly-destroy
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+      AWS_STATE_BUCKET: ${{ secrets.AWS_STATE_BUCKET }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: python3 bootstrap/scripts/night.py aws
+
+  azure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: nightly-destroy
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_STATE_ACCOUNT: ${{ secrets.AZURE_STATE_ACCOUNT }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: python3 bootstrap/scripts/night.py azure
+
+  gcp:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: nightly-destroy
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+      GCP_PROJECT_NUMBER: ${{ secrets.GCP_PROJECT_NUMBER }}
+      GCP_STATE_BUCKET: ${{ secrets.GCP_STATE_BUCKET }}
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: python3 bootstrap/scripts/night.py gcp

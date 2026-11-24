@@ -1,0 +1,153 @@
+name: site
+
+# Builds the site once and deploys it to Azure and AWS. First come both looks, which show what would change and share one
+# approval. Then one deploy after the other, each with an approval of its own, does exactly that. No code gets a cloud token
+# here before it is on main, so before a person has approved it. What the steps do stands in site/deploy, because agents may
+# not change a workflow file: they can propose a change to it there, and that takes the same approval as any other change.
+on:
+  pull_request:
+    paths:
+      - site/**
+  push:
+    branches: [main]
+    paths:
+      - site/**
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: site-${{ github.event.pull_request.number || 'main' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+      - run: bash site/deploy/build.sh
+      # Both clouds get these bytes, and no others.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: site
+          path: site/out
+          if-no-files-found: error
+          # As long as a deploy can wait for its approval.
+          retention-days: 30
+
+  # The environment makes every job below wait for an approval, gives it the identity that may deploy, and allows main
+  # only. Each job names its own cloud's secrets and no others: GitHub hides a value only in jobs that use it.
+  look-azure:
+    if: ${{ github.event_name != 'pull_request' }}
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      fingerprint: ${{ steps.look.outputs.fingerprint }}
+    env:
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_STATE_ACCOUNT: ${{ secrets.AZURE_STATE_ACCOUNT }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: site
+          path: site/out
+      - id: look
+        run: python3 site/deploy/deploy.py look azure
+
+  look-aws:
+    if: ${{ github.event_name != 'pull_request' }}
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      fingerprint: ${{ steps.look.outputs.fingerprint }}
+    env:
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+      AWS_STATE_BUCKET: ${{ secrets.AWS_STATE_BUCKET }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: site
+          path: site/out
+      - id: look
+        run: python3 site/deploy/deploy.py look aws
+
+  # GitHub approves everything that waits for an environment at once. So the deploys never wait together.
+  deploy-azure:
+    if: ${{ !cancelled() && needs.look-azure.result == 'success' }}
+    needs: [look-azure, look-aws]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: production
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    env:
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_STATE_ACCOUNT: ${{ secrets.AZURE_STATE_ACCOUNT }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      FINGERPRINT: ${{ needs.look-azure.outputs.fingerprint }}
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: site
+          path: site/out
+      - run: python3 site/deploy/deploy.py apply azure
+
+  deploy-aws:
+    if: ${{ !cancelled() && needs.look-aws.result == 'success' }}
+    needs: [look-aws, deploy-azure]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: production
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    env:
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+      AWS_STATE_BUCKET: ${{ secrets.AWS_STATE_BUCKET }}
+      FINGERPRINT: ${{ needs.look-aws.outputs.fingerprint }}
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: site
+          path: site/out
+      - run: python3 site/deploy/deploy.py apply aws
