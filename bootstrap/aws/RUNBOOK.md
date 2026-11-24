@@ -43,8 +43,6 @@ Run once, as an administrator, in CloudShell. Nothing here needs a key, and GitH
    terraform init -lockfile=readonly && terraform plan -out=tfplan
    ```
 
-   A warning that the lock file was not updated is expected.
-
 7. Apply, and move the state into the new bucket straight away.
 
    ```bash

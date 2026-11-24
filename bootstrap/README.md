@@ -100,7 +100,8 @@ python3 scripts/github_checks.py schedules
 ## Rules for project code
 
 - **Init** with `-lockfile=readonly`, always. Terraform also installs providers that only the state names, and the
-  destroy identity can write state.
+  destroy identity can write state. The lock file needs checksums for every platform it is used on:
+  `terraform providers lock -platform=linux_amd64 -platform=linux_arm64 -platform=darwin_arm64`.
 - **Plan** with `-lock=false`. The plan identity cannot write the lock. Never combine `pull_request_target` with
   `id-token: write`.
 - **State** goes under the repo's own name: key `<repo>/...` on AWS, container `<repo>` on Azure, prefix `<repo>/...` on

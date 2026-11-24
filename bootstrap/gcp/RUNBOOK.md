@@ -87,8 +87,6 @@ them. A project is free.
    terraform init -lockfile=readonly && terraform plan -out=tfplan
    ```
 
-   A warning that the lock file was not updated is expected.
-
 8. Apply, and move the state into the new bucket straight away.
 
    ```bash
