@@ -93,6 +93,16 @@ elif tool == "gcloud":
 """
 
 
+# Every test runs as in a Cloud Shell, unless it says that it is on a Mac.
+UNAME = r"""#!/usr/bin/env python3
+import json, os, pathlib
+print(json.loads((pathlib.Path(os.environ["BOX"]) / "conf.json").read_text()).get("system", "Linux"))
+"""
+
+# What must not be in a file that others may read.
+PRIVATE = ["111122223333", "admin", "00000000-0000-0000-0000-000000000000", "Example", "someone", "example-project-1", "example-bootstrap-1", "210987654321", "tfstate-0a1b2c3d", "owner@example.com", "repo:", "/"]
+
+
 class Run(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
@@ -103,10 +113,11 @@ class Run(unittest.TestCase):
         bin_.mkdir()
         for name in ("aws", "az", "gcloud"):
             self.tool(bin_ / name, CLOUD)
+        self.tool(bin_ / "uname", UNAME)
         self.tool(self.box / "terraform", TERRAFORM)
         # Instead of downloading: put the stand-in where the real one would go.
         self.tool(self.box / "bootstrap/scripts/install-terraform.sh", f'#!/bin/sh\nmkdir -p "$1"\ncp "{self.box}/terraform" "$1/terraform"\n')
-        (self.box / "tmp").mkdir()
+        (self.box / "tmp").mkdir(mode=0o700)
 
     def tool(self, path, text):
         path.write_text(text)
@@ -126,8 +137,9 @@ class Run(unittest.TestCase):
             "TF_VAR_bootstrap_project_id": "example-bootstrap-1",
         }
 
-    def go(self, cloud, answer="yes", github=0, **conf):
-        command, env = self.prepare(cloud, github, **conf)
+    def go(self, cloud, answer="yes", github=0, env=None, **conf):
+        command, given = self.prepare(cloud, github, **conf)
+        env = {name: value for name, value in (given | (env or {})).items() if value is not None}
         (self.box / "answer").write_text(answer + "\n")
         env["RUN_TERMINAL"] = str(self.box / "answer")
         done = subprocess.run(command, env=env, capture_output=True, text=True)
@@ -353,6 +365,169 @@ class Run(unittest.TestCase):
         self.assertEqual(self.go("gcp", editor=True), 1)
         self.assertIn("Editor", self.out)
         self.assertFalse(self.applied())
+
+    # On a Mac
+
+    def there(self, cloud, env=None, **conf):
+        """A run on a Mac, where a Cloud Shell has made everything already."""
+        (self.box / "remote").write_text(str(EXPECTED[cloud]))
+        return self.go(cloud, env=env, **({"bucket": "tfstate-0a1b2c3d", "system": "Darwin"} | conf))
+
+    def test_a_mac_carries_out_a_later_change(self):
+        before = [subject.replace(":environment:plan", ":pull_request") for subject in SUBJECTS]
+        for cloud in self.each_cloud():
+            later = {"subjects_before": before, "update": 5}
+            self.assertEqual(self.there(cloud, answer="no", **later), 1)
+            self.assertFalse(self.applied())
+            self.assertEqual(self.there(cloud, **later), 0, self.out)
+            self.assertIn("This will create 0 and change 5 resources, and delete none, in:", self.out)
+            self.assertTrue(self.applied())
+            self.assertIn("15 subjects match", self.out)
+            # GitHub has the ids already, so they are not on the screen.
+            self.assertIn("Nothing new", self.out)
+            self.assertNotIn('{"cloud": "', self.out)
+
+    def test_a_mac_shows_what_github_needs_if_that_is_new(self):
+        for cloud in self.each_cloud():
+            for conf in ({"outputs_only": True}, {"total": EXPECTED[cloud] + 2}):
+                self.assertEqual(self.there(cloud, **conf), 0, self.out)
+                self.assertIn('{"cloud": "' + cloud, self.out)
+
+    def test_a_mac_makes_no_first_run(self):
+        # As in a wrong account: nothing is there, and nothing may be begun.
+        for cloud in self.each_cloud():
+            self.assertEqual(self.go(cloud, system="Darwin"), 1)
+            self.assertIn("Is it the right account?", self.out)
+            self.assertFalse(self.applied())
+            self.assertNotIn("terraform plan", self.log())
+
+    def test_a_mac_runs_only_what_lies_in_a_closed_folder(self):
+        closed = self.box / "tmp"
+        (self.box / "link").symlink_to(closed)
+        (self.box / "file").write_text("")
+        (self.box / "file").chmod(0o600)
+        for mode in (0o755, 0o750, 0o705, 0o711, 0o777, 0o701):
+            closed.chmod(mode)
+            self.assertEqual(self.there("aws"), 1)
+            self.assertIn("only you can open", self.out)
+        closed.chmod(0o700)
+        for name in ("link", "file", "nowhere"):
+            self.assertEqual(self.there("aws", env={"RUN_TMP": str(self.box / name)}), 1)
+            self.assertIn("only you can open", self.out)
+        # Closed, but by somebody else. Every system has one of these.
+        for name in ("/root", "/lost+found", "/private/var/db/sudo", "/private/var/audit", "/private/var/db/dhcpclient"):
+            path = pathlib.Path(name)
+            if path.exists() and path.lstat().st_uid != os.getuid() and path.lstat().st_mode & 0o777 == 0o700:
+                self.assertEqual(self.there("aws", env={"RUN_TMP": name}), 1)
+                self.assertIn("only you can open", self.out)
+                break
+        else:
+            self.assertNotIn("CI", os.environ, "no folder of somebody else's to try it on")
+        self.assertEqual(self.log(), "")
+        self.assertEqual(self.there("aws"), 0, self.out)
+
+    def test_a_cloud_shell_has_its_folder_for_itself(self):
+        (self.box / "tmp").chmod(0o777)
+        self.assertEqual(self.there("aws", system="Linux"), 0, self.out)
+
+    def test_a_mac_makes_a_folder_if_it_is_given_none(self):
+        for name in (None, ""):
+            own = self.box / f"own{name is None}"
+            own.mkdir(mode=0o700)
+            # mktemp takes the folder of the user, and not /tmp.
+            self.tool(self.box / "bin/mktemp", f'#!/bin/sh\n[ "$*" = -d ] || exit 1\nmkdir -m 700 "{own}/new" && echo "{own}/new"\n')
+            self.assertEqual(self.there("aws", env={"RUN_TMP": name}), 0, self.out)
+            self.assertEqual(list(own.iterdir()), [])
+            self.assertEqual(self.there("aws", env={"RUN_TMP": name}, delete=1), 1)
+            self.assertEqual(list(own.iterdir()), [])
+        # And none if it has one.
+        self.tool(self.box / "bin/mktemp", "#!/bin/sh\nexit 1\n")
+        self.assertEqual(self.there("aws"), 0, self.out)
+
+    def test_github_limit_on_a_mac(self):
+        for cloud in self.each_cloud():
+            self.assertEqual(self.there(cloud, github=3, answer="no"), 1)
+            self.assertIn("Start again in an hour", self.out)
+            self.assertNotIn("your own computer", self.out)
+            self.assertEqual(self.log(), "")
+            self.assertEqual(self.there(cloud, github=3), 0, self.out)
+
+    # The result
+
+    def result(self, folder="results"):
+        files = sorted((self.box / folder).iterdir())
+        self.assertEqual(len(files), 1)
+        self.assertRegex(files[0].name, r"^2\d\d\d-\d\d-\d\dT\d{6}Z-(aws|azure|gcp)\.txt$")
+        text = files[0].read_text()
+        for value in PRIVATE:
+            self.assertNotIn(value, text)
+        self.assertEqual(files[0].stat().st_mode & 0o777, 0o644)
+        files[0].unlink()
+        return text.splitlines()
+
+    def test_the_result(self):
+        steps = ["GitHub: the environments behind the trust", "Terraform", "Sign-in", "Plan"]
+        last = ["Check: nothing left to change", "Check: every subject this cloud trusts", "For GitHub"]
+        for cloud in self.each_cloud():
+            where = {"RUN_RESULTS": str(self.box / "results")}
+            self.assertEqual(self.there(cloud, env=where, update=5, subjects_before=SUBJECTS), 0, self.out)
+            lines = self.result()
+            self.assertEqual(lines[0], f"cloud: {cloud}")
+            self.assertRegex(lines[1], "^code: ([0-9a-f]{40}|not known)$")
+            self.assertRegex(lines[2], r"^began: 2\d\d\d-\d\d-\d\dT\d\d:\d\dZ$")
+            self.assertRegex(lines[-1], r"^ended: 2\d\d\d-\d\d-\d\dT\d\d:\d\dZ, ok$")
+            expected = [f"step: {step}" for step in steps] + ["plan: 0 to create, 5 to change, 0 to delete", "you said yes", "step: Apply"]
+            expected += [f"step: {last[0]}", "nothing is left to change", f"step: {last[1]}", "every subject matches", f"step: {last[2]}"]
+            self.assertEqual(lines[3:-1], expected)
+
+    def test_the_result_of_a_run_that_stops(self):
+        for conf, seen, stopped_at in (
+            ({"answer": "no", "update": 5}, "plan: 0 to create, 5 to change, 0 to delete", "step: Plan"),
+            # A replacement counts as both.
+            ({"delete": 2}, "plan: 2 to create, 0 to change, 2 to delete", "step: Plan"),
+            ({"extra_subjects": ["repo:anyone/x:pull_request"]}, "nothing is left to change", "step: Check: every subject this cloud trusts"),
+            ({"github": 1}, "step: GitHub: the environments behind the trust", "step: GitHub: the environments behind the trust"),
+            ({"bucket": ""}, "step: Sign-in", "step: Sign-in"),
+        ):
+            for cloud in self.each_cloud():
+                self.assertEqual(self.there(cloud, env={"RUN_RESULTS": str(self.box / "results")}, **conf), 1)
+                lines = self.result()
+                self.assertTrue(lines[-1].endswith(", stopped"), lines)
+                if cloud == "gcp" and conf.get("answer"):
+                    # There is a question of its own before the plan.
+                    seen = stopped_at = "step: Sign-in"
+                self.assertIn(seen, lines)
+                self.assertEqual([line for line in lines if line.startswith("step:")][-1], stopped_at)
+                self.assertNotIn("you said yes", lines if conf.get("answer") else [])
+
+    def test_a_result_also_in_a_cloud_shell(self):
+        self.assertEqual(self.go("aws", env={"RUN_RESULTS": str(self.box / "results")}), 0, self.out)
+        self.assertIn("step: Moving the state into the new bucket", self.result())
+
+    def test_the_folder_of_the_result_is_ones_own(self):
+        shared = self.box / "shared"
+        shared.mkdir()
+        (self.box / "link").symlink_to(shared)
+        (self.box / "file").write_text("")
+        for name, mode in (("shared", 0o777), ("shared", 0o775), ("shared", 0o757), ("link", 0o755), ("file", None), ("nowhere/deeper", None)):
+            if mode:
+                shared.chmod(mode)
+            self.assertEqual(self.there("aws", env={"RUN_RESULTS": str(self.box / name)}), 0, self.out)
+            self.assertIn("No result is written", self.out)
+            self.assertEqual(list(shared.iterdir()), [])
+        # A folder that is there already, whatever the files would be made like otherwise.
+        for mode in (0o755, 0o700):
+            shared.chmod(mode)
+            command, env = self.prepare("aws", bucket="tfstate-0a1b2c3d", system="Darwin")
+            (self.box / "answer").write_text("yes\n")
+            (self.box / "remote").write_text(str(EXPECTED["aws"]))
+            subprocess.run(["bash", "-c", 'umask 077; exec "$@"', "x", *command], env=env | {"RUN_RESULTS": str(shared), "RUN_TERMINAL": str(self.box / "answer")}, capture_output=True, check=True)
+            self.result("shared")
+
+    def test_no_result_without_a_folder(self):
+        for folder in (None, ""):
+            self.assertEqual(self.there("aws", env={"RUN_RESULTS": folder}), 0, self.out)
+            self.assertNotIn("result", self.out)
 
     def test_usage(self):
         for arguments in ([], ["oracle"]):

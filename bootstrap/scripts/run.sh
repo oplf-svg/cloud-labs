@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs one bootstrap from start to finish in that cloud's Cloud Shell.
+# Runs one bootstrap from start to finish, in that cloud's Cloud Shell or on a Mac.
 #
 #   run.sh aws | azure | gcp
 #
@@ -7,6 +7,9 @@
 # one or would delete something. It can be run again at any time: it continues where an earlier run
 # stopped, and carries out what has changed here since. The runbook next to each stack explains every
 # step.
+#
+# On a Mac it only carries on what is there already. RUN_TMP is a folder for Terraform that nobody else
+# can open, and RUN_RESULTS a folder for a file that says how it went, without an id or a name.
 #
 # The functions are called by name, as "${cloud}_setup", which shellcheck cannot see.
 # shellcheck disable=SC2317,SC2329
@@ -25,11 +28,22 @@ esac
 
 scripts=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 cd "$scripts/../$cloud"
-work=${RUN_TMP:-/tmp}
+system=$(uname -s)
 terminal=${RUN_TERMINAL:-/dev/tty}
-trap 'rm -f tfplan' EXIT
+result=""
+made=""
+ending=stopped
+trap 'rm -rf tfplan ${made:+"$made"}; note "ended: $(date -u +%Y-%m-%dT%H:%MZ), $ending"' EXIT
 
-step() { printf '\n== %s\n' "$*"; }
+# Only words of this script's own ever get into the result.
+note() {
+  if [ -n "$result" ]; then printf '%s\n' "$*" >> "$result"; fi
+}
+
+step() {
+  printf '\n== %s\n' "$*"
+  note "step: $*"
+}
 
 stop() {
   printf '\nSTOPPED: %s\n' "$*" >&2
@@ -55,6 +69,31 @@ ask() {
   printf '%s' "$1" >&2
   read -r answer < "$terminal" || true
   printf '%s' "$answer"
+}
+
+# Whether a folder is this user's, and nobody else can look into it.
+closed() {
+  python3 -c 'import os, sys; s = os.lstat(sys.argv[1]); sys.exit(s.st_uid != os.getuid() or s.st_mode & 0o170077 != 0o040000)' "$1"
+}
+
+# Makes a new file that everybody may read, in a folder that only this user can change. Whoever else could change it
+# could put a link there, and so choose what is written over.
+open_result() {
+  python3 - "$1" "$cloud" << 'EOF'
+import os, stat, sys, time
+folder = sys.argv[1]
+try:
+    os.mkdir(folder)
+    os.chmod(folder, 0o755)
+except FileExistsError:
+    pass
+about = os.lstat(folder)
+if not stat.S_ISDIR(about.st_mode) or about.st_uid != os.getuid() or about.st_mode & 0o022:
+    sys.exit(1)
+file = os.path.join(folder, time.strftime("%Y-%m-%dT%H%M%SZ-", time.gmtime()) + sys.argv[2] + ".txt")
+os.fchmod(os.open(file, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW), 0o644)
+print(file)
+EOF
 }
 
 # ---- What differs per cloud ----------------------------------------------------------------------
@@ -225,12 +264,33 @@ gcp_subjects() {
 
 # ---- The run -------------------------------------------------------------------------------------
 
+if [ "$system" = Darwin ]; then
+  # All users of a Mac share /tmp, and what lies in this folder is run with your rights.
+  if [ -z "${RUN_TMP:-}" ]; then made=$(mktemp -d); fi
+  work=${RUN_TMP:-$made}
+  closed "$work" || stop "RUN_TMP has to be a folder that only you can open. Nothing was changed."
+else
+  work=${RUN_TMP:-/tmp}
+fi
+if [ -n "${RUN_RESULTS:-}" ]; then
+  result=$(open_result "$RUN_RESULTS" 2> /dev/null) || echo "No result is written: RUN_RESULTS is not a folder that only you can change."
+fi
+note "cloud: $cloud"
+note "code: $(git -C "$scripts" rev-parse HEAD 2> /dev/null || echo 'not known')"
+note "began: $(date -u +%Y-%m-%dT%H:%MZ)"
+
 step "GitHub: the environments behind the trust"
 code=0
 python3 "$scripts/github_checks.py" environments || code=$?
 case "$code" in
   0) ;;
-  3) confirm "Have you run that check on your own computer, and did it print ok five times?" || stop "Run it there first: python3 bootstrap/scripts/github_checks.py environments" ;;
+  3)
+    if [ "$system" = Darwin ]; then
+      confirm "GitHub answers no more questions from this address for up to an hour. Did this check print ok five times since the environments were last changed?" || stop "Start again in an hour. Nothing was changed."
+    else
+      confirm "Have you run that check on your own computer, and did it print ok five times?" || stop "Run it there first: python3 bootstrap/scripts/github_checks.py environments"
+    fi
+    ;;
   *) stop "Put the environments right first. Nothing was changed." ;;
 esac
 
@@ -256,6 +316,8 @@ elif [ -n "$bucket" ]; then
   local_state=no
   first_run=no
 else
+  # Until it is moved, the only state of a first run lies in this folder, which may be gone tomorrow.
+  [ "$system" != Darwin ] || stop "There is no bootstrap in this place. Is it the right account? A first run belongs into that cloud's own shell. Nothing was changed."
   "${cloud}_fresh"
   rm -f backend.tf
   local_state=yes
@@ -274,6 +336,10 @@ actions = [r["change"]["actions"] for r in json.load(sys.stdin).get("resource_ch
 print(*(sum(verb in a for a in actions) for verb in ("create", "update", "delete")))
 ')
 read -r create update delete <<< "$counts"
+note "plan: $create to create, $update to change, $delete to delete"
+# A plan that creates and changes nothing has new values for GitHub, or nothing at all.
+new=no
+if [ "$create" != 0 ] || { [ "$code" = 2 ] && [ "$update" = 0 ]; }; then new=yes; fi
 [ "$delete" = 0 ] || stop "The plan would delete or replace $delete resource(s). Nothing was changed. See the runbook."
 if [ "$first_run" = yes ] && [ "$create" != "$expected" ]; then
   stop "The plan would create $create resources and should create $expected. Nothing was changed."
@@ -282,6 +348,7 @@ fi
 if [ "$code" = 2 ]; then
   confirm "This will create $create and change $update resources, and delete none, in:
   $where" || stop "Nothing was changed."
+  note "you said yes"
   step "Apply"
   terraform apply -input=false tfplan || stop "The apply stopped halfway. Keep this window open, wait a minute and run the same command again: it continues."
 fi
@@ -309,8 +376,14 @@ step "Check: nothing left to change"
 code=0
 terraform plan -input=false -detailed-exitcode > /dev/null || code=$?
 case "$code" in
-  0) echo "ok" ;;
-  2) echo "Terraform still wants to change something. Run the same command again and read the plan." ;;
+  0)
+    echo "ok"
+    note "nothing is left to change"
+    ;;
+  2)
+    echo "Terraform still wants to change something. Run the same command again and read the plan."
+    note "something is left to change"
+    ;;
   *) stop "The check failed. Everything was created: run the same command again." ;;
 esac
 "${cloud}_last"
@@ -318,11 +391,17 @@ esac
 step "Check: every subject this cloud trusts"
 if diff <(jq -r '.[][]' ../subjects.json | sort) <("${cloud}_subjects" | sort); then
   echo "ok   15 subjects match"
+  note "every subject matches"
 else
   stop "The list above differs from subjects.json (< expected, > found). Everything was created, but look into this before you use it."
 fi
 
+ending=ok
 step "For GitHub"
+if [ "$system" = Darwin ] && [ "$new" = no ]; then
+  echo "Nothing new: GitHub has these ids already."
+  exit 0
+fi
 cat << 'EOF'
 Copy everything between the two lines. It holds ids, not passwords, so keep it off public pages.
 Then run this on your own computer, in your clone of the repo:
