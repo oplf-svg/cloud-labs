@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Deploys the site to one cloud, in two steps that a person approves one by one.
+"""Deploys the site to one cloud, in two steps.
 
   deploy.py look aws | azure     says what would change, and changes nothing
   deploy.py apply aws | azure    does that if it is still the same, and checks what visitors get
 
-Runs in GitHub Actions on main, in the production environment. Job logs are public, so it prints its own
-words, the names of public files, and errors without anything that could be an id or an address.
+Runs in GitHub Actions on main. A look runs in the plan environment, as an identity that can do nothing
+else, so nobody has to approve it. An apply runs in the production environment, after a person has approved
+it. Job logs are public, so it prints its own words, the names of public files, and errors without anything
+that could be an id or an address.
 """
 
 import argparse
@@ -17,6 +19,7 @@ import json
 import os
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -30,6 +33,9 @@ from check_sign_in import CLOUDS, OWNER, SUBJECTS, Unusable, answer, github_toke
 from github_checks import check_schedules, get
 
 REPO = "cloud-labs"
+
+# Whose rights each step has.
+TIERS = {"look": "plan", "apply": "apply"}
 
 # Everything that each stack may consist of. Anything else in a plan stops the deploy.
 STACK = {
@@ -71,6 +77,7 @@ SIGN_IN = ["/.auth/login/aad", "/.auth/login/github"]
 SETTINGS = SITE / "deploy" / "staticwebapp.config.json"
 
 AZURE_SITE = "resourceGroups/rg-cloud-labs/providers/Microsoft.Web/staticSites/cloud-labs-site"
+AZURE_STATE = "cloud-labs/site/terraform.tfstate"
 
 # Microsoft's own client for uploads, one fixed build of it.
 CLIENT = "https://swalocaldeployv2-bndtgugjgqc3dhdx.b01.azurefd.net/downloads/a58ffd5ddfced557500b295844f2490acc313951/linux/StaticSitesClient"
@@ -245,6 +252,12 @@ class Terraform:
     def init(self, **backend):
         self("init", "-no-color", "-lockfile=readonly", *(f"-backend-config={name}={value}" for name, value in backend.items()))
 
+    def init_without_state(self):
+        """For a look before there is a state. Azure's backend would write an empty one, so this copy of the stack uses none."""
+        self.folder = shutil.copytree(self.folder, self.work / "stack", ignore=shutil.ignore_patterns(".terraform"))
+        (self.folder / "local_override.tf").write_text('terraform {\n  backend "local" {}\n}\n', encoding="utf-8")
+        self.init()
+
     def known(self):
         """What the state holds about each resource, by its address."""
         state = json.loads(self("show", "-json") or "{}")
@@ -374,7 +387,8 @@ def place_on_aws(known):
 
 def prepare_aws(token, env, run, work, files, lock):
     keys, aws = sign_in_to_aws(token, env, run, work)
-    terraform = Terraform("aws", keys, run, work, env["AWS_ACCOUNT_ID"] + env["AWS_STATE_BUCKET"] + env["AWS_ROLE_ARN"])
+    # A look and its apply have to come to the same mark, so nothing is part of it that differs between their identities.
+    terraform = Terraform("aws", keys, run, work, env["AWS_ACCOUNT_ID"] + env["AWS_STATE_BUCKET"])
     terraform.init(bucket=env["AWS_STATE_BUCKET"])
     bucket, distribution, _ = place_on_aws(terraform.known())
     on_plan = on_free_plan(aws, distribution)
@@ -417,22 +431,38 @@ def apply_aws(token, env, run, send, ask, sleep, work, files, folder, agreed):
 # Azure
 
 
+def sign_in_to_azure(token, env, send, resource="https://management.azure.com"):
+    form = {
+        "client_id": env["AZURE_CLIENT_ID"],
+        "client_assertion": token,
+        "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+        "grant_type": "client_credentials",
+        "scope": f"{resource}/.default",
+    }
+    status, _, body = send("POST", f"https://login.microsoftonline.com/{env['AZURE_TENANT_ID']}/oauth2/v2.0/token", None, urllib.parse.urlencode(form).encode())
+    if status != 200:
+        found = re.search(rb"AADSTS[0-9]{4,9}", body)
+        raise Refused(f"Azure refused the sign-in: {found.group().decode() if found else f'HTTP {status}'}.")
+    return json.loads(body)["access_token"]
+
+
+def has_state(token, env, send):
+    """Whether there is a state with something in it. Terraform takes an empty file for none."""
+    key = sign_in_to_azure(token, env, send, "https://storage.azure.com")
+    url = f"https://{env['AZURE_STATE_ACCOUNT']}.blob.core.windows.net/{AZURE_STATE}"
+    status, headers, _ = send("HEAD", url, {"Authorization": f"Bearer {key}", "x-ms-version": "2023-11-03"})
+    if status == 404 and headers.get("x-ms-error-code") == "BlobNotFound":
+        return False
+    if status != 200:
+        raise Refused(f"Azure refused to say whether there is a state: HTTP {status}.")
+    return headers.get("Content-Length") != "0"
+
+
 class Azure:
     """Signs in with GitHub's token. Its answers are never printed."""
 
     def __init__(self, token, env, send):
-        form = {
-            "client_id": env["AZURE_CLIENT_ID"],
-            "client_assertion": token,
-            "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
-            "grant_type": "client_credentials",
-            "scope": "https://management.azure.com/.default",
-        }
-        status, _, body = send("POST", f"https://login.microsoftonline.com/{env['AZURE_TENANT_ID']}/oauth2/v2.0/token", None, urllib.parse.urlencode(form).encode())
-        if status != 200:
-            found = re.search(rb"AADSTS[0-9]{4,9}", body)
-            raise Refused(f"Azure refused the sign-in: {found.group().decode() if found else f'HTTP {status}'}.")
-        self.key, self.env, self.send = json.loads(body)["access_token"], env, send
+        self.key, self.env, self.send = sign_in_to_azure(token, env, send), env, send
 
     def __call__(self, method, path, version, body=None, what=""):
         url = f"https://management.azure.com/subscriptions/{self.env['AZURE_SUBSCRIPTION_ID']}/{path}?api-version={version}"
@@ -479,12 +509,17 @@ def prepare_azure(token, env, run, send, ask, work, files, lock):
         "ACTIONS_ID_TOKEN_REQUEST_URL": env["ACTIONS_ID_TOKEN_REQUEST_URL"],
         "ACTIONS_ID_TOKEN_REQUEST_TOKEN": env["ACTIONS_ID_TOKEN_REQUEST_TOKEN"],
     }
-    terraform = Terraform("azure", own, run, work, env["AZURE_SUBSCRIPTION_ID"] + env["AZURE_STATE_ACCOUNT"] + env["AZURE_CLIENT_ID"])
-    terraform.init(storage_account_name=env["AZURE_STATE_ACCOUNT"])
+    terraform = Terraform("azure", own, run, work, env["AZURE_SUBSCRIPTION_ID"] + env["AZURE_STATE_ACCOUNT"])
+    if lock or has_state(token, env, send):
+        terraform.init(storage_account_name=env["AZURE_STATE_ACCOUNT"])
+    else:
+        terraform.init_without_state()
     host = host_on_azure(terraform.known())
     plan = terraform.plan(lock, subscription_id=env["AZURE_SUBSCRIPTION_ID"])
-    if not azure.registered():
-        print("     turn on static sites (Microsoft.Web) in the subscription")
+    # Whoever looks may not ask for this, because it is a setting of the subscription. Where the site exists, it is on.
+    off = not azure.registered() if lock else any(change["actions"] == ["create"] for _, change in moves(plan))
+    if off:
+        print("     turn on static sites (Microsoft.Web) in the subscription" + ("" if lock else ", if they are off"))
     there = served(host, files, ask) if host else {}
     print(*difference(files, there), sep="\n")
     print(f"The settings: {SETTINGS.name}, {hashlib.sha256(SETTINGS.read_bytes()).hexdigest()}", flush=True)
@@ -547,7 +582,7 @@ LOOK = {"aws": look_aws, "azure": look_azure}
 APPLY = {"aws": apply_aws, "azure": apply_azure}
 
 
-def sign_in_with_github(cloud, env, send):
+def sign_in_with_github(step, cloud, env, send):
     needed, audience, _ = CLOUDS[cloud]
     if env.get("GITHUB_REPOSITORY") != f"{OWNER}/{REPO}":
         raise Stop("This is not the repo that the site is deployed from.")
@@ -555,14 +590,14 @@ def sign_in_with_github(cloud, env, send):
     if missing:
         raise Stop(f"Not set: {', '.join(missing)}.")
     token = github_token(audience, env, send)
-    if subject_of(token) != SUBJECTS[REPO]["apply"]:
-        raise Stop("GitHub's subject is not the one that may deploy.")
+    if subject_of(token) != SUBJECTS[REPO][TIERS[step]]:
+        raise Stop(f"GitHub's subject is not this repo's {TIERS[step]}.")
     return token
 
 
 def main(argv=None, env=os.environ, run=subprocess.run, send=answer, ask=visit, fetch=get, sleep=time.sleep, folder=SITE / "out"):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("step", choices=["look", "apply"])
+    parser.add_argument("step", choices=TIERS)
     parser.add_argument("cloud", choices=LOOK)
     args = parser.parse_args(argv)
     try:
@@ -577,7 +612,7 @@ def main(argv=None, env=os.environ, run=subprocess.run, send=answer, ask=visit, 
             newest, this = (fetch(f"/repos/{OWNER}/{REPO}/commits?path=site&sha={at}&per_page=1") or [{}] for at in ("main", env["GITHUB_SHA"]))
             if not newest[0].get("sha") or newest[0]["sha"] != this[0].get("sha"):
                 raise Stop("There is a newer version of the site on main. Start this workflow again from there.")
-        token = sign_in_with_github(args.cloud, env, send)
+        token = sign_in_with_github(args.step, args.cloud, env, send)
 
         def agreed(mark):
             if not hmac.compare_digest(mark, env["FINGERPRINT"]):

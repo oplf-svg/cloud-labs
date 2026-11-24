@@ -45,7 +45,7 @@ export const en: SiteWords = {
   },
   score: {
     title: "The latest run, cloud by cloud",
-    lead: "A pull request signs in with a read-only identity and tries what it must not be able to do.",
+    lead: "A read-only identity signs in and tries what it must not be able to do.",
     cloud: "Cloud", checks: "Checks", in: "Let in", refused: "Refused", empty: "Nothing there yet", wrong: "Wrong answers", answer: "Answer", open: "Open the run",
     verdict: (checks, wrong) => `${checks} checks, ${wrong === 0 ? "no wrong answer" : wrong === 1 ? "1 wrong answer" : `${wrong} wrong answers`}`,
     note: "“Nothing there yet” is not a pass. No project has stored anything yet, so that check cannot prove who may open it.",
@@ -84,7 +84,7 @@ export const en: SiteWords = {
       title: "Nobody holds the keys",
       text: ["GitHub signs in to each cloud with a token that lasts minutes. No cloud password or key is stored in GitHub. Each project has three identities on each cloud, and none of them can do another's job."],
       tiers: [
-        { name: "Plan", who: "Pull requests", can: "Looks, and cannot change anything", state: "tested" },
+        { name: "Plan", who: "The main branch, by itself", can: "Looks, and cannot change anything", state: "tested" },
         { name: "Apply", who: "The main branch, after I approve", can: "Deploys, but cannot hand out rights", state: "used" },
         { name: "Destroy", who: "Every night, on its own", can: "Deletes, and cannot create anything", state: "tested" },
       ],

@@ -5,7 +5,8 @@
 #
 # It shows the plan and asks before it creates anything, and stops if the plan is not the expected
 # one or would delete something. It can be run again at any time: it continues where an earlier run
-# stopped. The runbook next to each stack explains every step.
+# stopped, and carries out what has changed here since. The runbook next to each stack explains every
+# step.
 #
 # The functions are called by name, as "${cloud}_setup", which shellcheck cannot see.
 # shellcheck disable=SC2317,SC2329

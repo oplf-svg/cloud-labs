@@ -1,9 +1,31 @@
 # Runs against mocked providers: no credentials, nothing is created.
 
-mock_provider "aws" {
-  mock_resource "aws_iam_policy" {
-    defaults = { arn = "arn:aws:iam::111122223333:policy/github-actions/mock" }
-  }
+mock_provider "aws" {}
+
+# Each policy has an ARN of its own, so that the tests can tell them apart.
+override_resource {
+  target = aws_iam_policy.guardrails
+  values = { arn = "arn:aws:iam::111122223333:policy/github-actions/guardrails" }
+}
+
+override_resource {
+  target = aws_iam_policy.read_extras
+  values = { arn = "arn:aws:iam::111122223333:policy/github-actions/read-extras" }
+}
+
+override_resource {
+  target = aws_iam_policy.workload_boundary
+  values = { arn = "arn:aws:iam::111122223333:policy/github-actions/workload-boundary" }
+}
+
+override_resource {
+  target = aws_iam_policy.workload_iam
+  values = { arn = "arn:aws:iam::111122223333:policy/github-actions/workload-iam" }
+}
+
+override_resource {
+  target = aws_iam_policy.delete
+  values = { arn = "arn:aws:iam::111122223333:policy/github-actions/delete" }
 }
 
 mock_provider "random" {
@@ -24,7 +46,7 @@ variables {
     cloud-labs         = 1469385611
   }
   suffixes = {
-    plan    = "pull_request"
+    plan    = "environment:plan"
     apply   = "environment:production"
     destroy = "environment:nightly-destroy"
   }
@@ -64,10 +86,18 @@ run "trust" {
 
   assert {
     condition = alltrue([
-      for key, role in aws_iam_role.ci :
-      endswith(key, "/plan") != strcontains(role.assume_role_policy, "\"token.actions.githubusercontent.com:ref\":\"refs/heads/main\"")
+      for role in aws_iam_role.ci :
+      jsondecode(role.assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:ref"] == "refs/heads/main"
     ])
-    error_message = "Apply and destroy must also require the main branch."
+    error_message = "Every role must also require the main branch."
+  }
+
+  assert {
+    condition = alltrue([
+      for role in aws_iam_role.ci :
+      can(regex(":environment:(plan|production|nightly-destroy)$", jsondecode(role.assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"]))
+    ])
+    error_message = "Only jobs in one of the three environments may be trusted, so never a pull request."
   }
 }
 
@@ -82,8 +112,29 @@ run "permissions" {
   }
 
   assert {
-    condition     = length([for key, a in aws_iam_role_policy_attachment.ci : key if endswith(key, "/guardrails")]) == 15
-    error_message = "Every role must carry the guardrails."
+    condition = { for role in distinct([for a in aws_iam_role_policy_attachment.ci : a.role]) : role => toset([for a in aws_iam_role_policy_attachment.ci : a.policy_arn if a.role == role]) } == merge([
+      for repo, id in var.repo_ids : {
+        "gha-${repo}-plan" = toset([
+          "arn:aws:iam::aws:policy/SecurityAudit",
+          "arn:aws:iam::aws:policy/job-function/ViewOnlyAccess",
+          "arn:aws:iam::111122223333:policy/github-actions/read-extras",
+          "arn:aws:iam::111122223333:policy/github-actions/guardrails",
+        ])
+        "gha-${repo}-apply" = toset([
+          "arn:aws:iam::aws:policy/PowerUserAccess",
+          "arn:aws:iam::111122223333:policy/github-actions/workload-iam",
+          "arn:aws:iam::111122223333:policy/github-actions/guardrails",
+        ])
+        "gha-${repo}-destroy" = toset([
+          "arn:aws:iam::aws:policy/SecurityAudit",
+          "arn:aws:iam::aws:policy/job-function/ViewOnlyAccess",
+          "arn:aws:iam::111122223333:policy/github-actions/read-extras",
+          "arn:aws:iam::111122223333:policy/github-actions/delete",
+          "arn:aws:iam::111122223333:policy/github-actions/guardrails",
+        ])
+      }
+    ]...)
+    error_message = "Every role must carry the guardrails and the policies of its own tier, and no others."
   }
 
   assert {
@@ -126,6 +177,29 @@ run "permissions" {
       ])
     ])
     error_message = "Pipelines and the workloads they create share the same denies."
+  }
+
+  # Everything that can change a flat-rate plan, from AWS's own list of actions.
+  assert {
+    condition = alltrue([
+      for p in [aws_iam_policy.guardrails, aws_iam_policy.workload_boundary] : alltrue([
+        for a in ["ApprovePaidSubscription", "AssociateResourcesToSubscription", "CancelSubscription", "CancelSubscriptionChange", "CreateSubscription", "DisassociateResourcesFromSubscription", "UpdateSubscription"] :
+        anytrue([
+          for s in jsondecode(p.policy).Statement : anytrue([for d in flatten([s.Action]) : can(regex("^${replace(d, "*", ".*")}$", "pricingplanmanager:${a}"))])
+          if s.Effect == "Deny" && try(s.Resource, "") == "*" && can(s.Action) && !can(s.Condition)
+        ])
+      ])
+    ])
+    error_message = "No pipeline, and nothing that one creates, may change a flat-rate plan."
+  }
+
+  # What the look at the site needs, and the AWS policies leave out.
+  assert {
+    condition = alltrue([
+      for a in ["cloudfront:DescribeFunction", "pricingplanmanager:ListSubscriptions", "s3:ListTagsForResource"] :
+      contains(flatten([for s in jsondecode(aws_iam_policy.read_extras.policy).Statement : s.Action if s.Effect == "Allow"]), a)
+    ])
+    error_message = "Plan must be able to look at a site on CloudFront."
   }
 
   assert {

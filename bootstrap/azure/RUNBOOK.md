@@ -119,8 +119,13 @@ It checks every value, lists the names it will set, never shows a value, and ask
 
 ## Run it again later
 
-For example to pass `-var 'destroy_extra=["..."]'`. Pass every variable you ever set, each time: leaving one out undoes
-it. Do steps 2 to 5, then:
+`run.sh` carries out what has changed here since, for example in [subjects.json](../subjects.json). It shows the plan,
+asks, and stops if something would be deleted or replaced. Everything that a new subject or a new permission touches
+changes in place. Azure takes some minutes to use a changed credential everywhere. It passes no variables and takes back
+what one of them had added, so first export every variable you ever set, as in `export TF_VAR_destroy_extra='["..."]'`.
+
+By hand, for example to pass `-var 'destroy_extra=["..."]'`: pass every variable you ever set, each time, because
+leaving one out undoes it. Do steps 2 to 5, then:
 
 ```bash
 A=$(az storage account list -g rg-github-bootstrap --query '[0].name' --output tsv)
@@ -130,7 +135,12 @@ terraform plan
 ```
 
 The lock only blocks deletion. If a change has to replace something, apply once with `-var allow_state_deletion=true`,
-then again without it.
+then again without it. A federated credential never needs that: change its subject yourself, with the values from
+[subjects.json](../subjects.json) in place of `REPO`, `TIER` and `SUBJECT`, and run `run.sh` again.
+
+```bash
+az identity federated-credential update -g rg-github-bootstrap --identity-name id-gha-REPO-TIER -n github-actions --issuer https://token.actions.githubusercontent.com --audiences api://AzureADTokenExchange --subject SUBJECT
+```
 
 ## Undo it
 

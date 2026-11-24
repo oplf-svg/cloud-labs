@@ -3,6 +3,7 @@ import copy
 import datetime
 import io
 import unittest
+import unittest.mock
 
 import github_checks as checks
 
@@ -23,15 +24,19 @@ def environment(name, reviewer):
 
 GOOD = {
     BASE: {"id": 1469385611, "owner": {"id": 228823995}},
-    f"{BASE}/environments": {"environments": [environment("production", True), environment("nightly-destroy", False)]},
+    f"{BASE}/environments": {"environments": [environment("production", True), environment("nightly-destroy", False), environment("plan", False)]},
     f"{BASE}/environments/production/deployment-branch-policies": {"branch_policies": [{"name": "main", "type": "branch"}]},
     f"{BASE}/environments/nightly-destroy/deployment-branch-policies": {"branch_policies": [{"name": "main", "type": "branch"}]},
+    f"{BASE}/environments/plan/deployment-branch-policies": {"branch_policies": [{"name": "main", "type": "branch"}]},
     f"{BASE}/actions/workflows?per_page=100": {"workflows": [{"id": 7, "path": checks.DESTROY_WORKFLOW, "state": "active"}]},
     f"{BASE}/commits?sha=main&per_page=1": [{"commit": {"committer": {"date": "2026-11-28T12:00:00Z"}}}],
     f"{BASE}/actions/workflows/7/runs?event=schedule&status=completed&per_page=1": {
         "workflow_runs": [{"created_at": "2026-12-01T03:37:00Z", "status": "completed", "conclusion": "success"}]
     },
 }
+
+
+NAMES = ("production", "nightly-destroy", "plan")
 
 
 class Environments(unittest.TestCase):
@@ -41,43 +46,69 @@ class Environments(unittest.TestCase):
             change(data)
         return checks.check_environments(REPO, data.get)
 
+    def each(self, change, rules=False):
+        """Changes one environment after the other, or the list of branches that it allows, and says what is wrong then."""
+        for number, name in enumerate(NAMES):
+            with self.subTest(name):
+                path = f"{BASE}/environments/{name}/deployment-branch-policies"
+                part = lambda data: data[path]["branch_policies"] if rules else data[f"{BASE}/environments"]["environments"][number]
+                yield name, self.problems(lambda data: change(part(data)))
+
     def test_accepts_the_intended_setup(self):
         self.assertEqual(self.problems(), [])
 
-    def test_missing_destroy_environment(self):
-        self.assertEqual(
-            self.problems(lambda d: d[f"{BASE}/environments"]["environments"].pop()),
-            ["environment nightly-destroy does not exist"],
-        )
+    def test_the_environments_are_those_that_the_subjects_name(self):
+        for tiers in checks.SUBJECTS.values():
+            self.assertEqual({tier: subject.partition(":environment:")[2] for tier, subject in tiers.items()}, {"plan": "plan", "apply": "production", "destroy": "nightly-destroy"})
 
-    def test_unprotected_destroy_environment(self):
+    def test_missing_environment(self):
+        for name, problems in self.each(lambda environment: environment.update(name="another")):
+            self.assertEqual(problems, [f"environment {name} does not exist"])
+
+    def test_unprotected_environment(self):
         # What GitHub creates by itself when a workflow names an environment that does not exist.
-        def change(data):
-            data[f"{BASE}/environments"]["environments"][1].update(
-                protection_rules=[], can_admins_bypass=True, deployment_branch_policy=None
-            )
+        for name, problems in self.each(lambda environment: environment.update(protection_rules=[], can_admins_bypass=True, deployment_branch_policy=None)):
+            expected = [f"environment {name} lets admins bypass its rules", f"environment {name} does not restrict branches"]
+            self.assertEqual(problems, (["environment production must have a required reviewer"] if name == "production" else []) + expected)
 
-        self.assertEqual(len(self.problems(change)), 2)
+    def test_admin_bypass(self):
+        for name, problems in self.each(lambda environment: environment.update(can_admins_bypass=True)):
+            self.assertEqual(problems, [f"environment {name} lets admins bypass its rules"])
+        for name, problems in self.each(lambda environment: environment.pop("can_admins_bypass")):
+            self.assertEqual(problems, [f"environment {name} lets admins bypass its rules"])
 
-    def test_extra_branch(self):
-        def change(data):
-            data[f"{BASE}/environments/nightly-destroy/deployment-branch-policies"]["branch_policies"].append(
-                {"name": "*", "type": "branch"}
-            )
+    def test_any_protected_branch(self):
+        for name, problems in self.each(lambda environment: environment["deployment_branch_policy"].update(protected_branches=True, custom_branch_policies=False)):
+            self.assertEqual(problems, [f"environment {name} does not restrict branches"])
 
-        self.assertEqual(self.problems(change), ["environment nightly-destroy allows more or less than the main branch"])
+    def test_other_branches(self):
+        changes = (
+            lambda rules: rules.append({"name": "*", "type": "branch"}),
+            # What would let a pull request in.
+            lambda rules: rules.append({"name": "refs/pull/*/merge", "type": "branch"}),
+            lambda rules: rules[0].update(name="ma*"),
+            lambda rules: rules.clear(),
+            # A tag can be made from any commit.
+            lambda rules: rules[0].update(type="tag"),
+        )
+        for change in changes:
+            for name, problems in self.each(change, rules=True):
+                self.assertEqual(problems, [f"environment {name} allows more or less than the main branch"])
 
-    def test_tag_named_main(self):
-        def change(data):
-            data[f"{BASE}/environments/production/deployment-branch-policies"]["branch_policies"][0]["type"] = "tag"
+    def test_reviewers(self):
+        for name, problems in self.each(lambda environment: environment.update(protection_rules=[{"type": "branch_policy"}])):
+            self.assertEqual(problems, ["environment production must have a required reviewer"] if name == "production" else [])
+        for name, problems in self.each(lambda environment: environment.update(protection_rules=[{"type": "branch_policy"}, {"type": "required_reviewers"}])):
+            self.assertEqual(problems, [] if name == "production" else [f"environment {name} must not have a required reviewer"])
 
-        self.assertEqual(self.problems(change), ["environment production allows more or less than the main branch"])
-
-    def test_production_without_reviewer(self):
-        def change(data):
-            data[f"{BASE}/environments"]["environments"][0]["protection_rules"].pop()
-
-        self.assertEqual(self.problems(change), ["environment production must have a required reviewer"])
+    def test_a_subject_that_no_environment_guards(self):
+        for tier in ("plan", "apply", "destroy"):
+            for ending in ("pull_request", "ref:refs/heads/main", "environment:another"):
+                with self.subTest(tier=tier, ending=ending):
+                    subjects = copy.deepcopy(checks.SUBJECTS)
+                    subjects[REPO][tier] = f"repo:oplf-svg@228823995/cloud-labs@1469385611:{ending}"
+                    with unittest.mock.patch.object(checks, "SUBJECTS", subjects):
+                        self.assertEqual(self.problems(), ["subjects.json does not match the repo's ids"])
 
     def test_recreated_repo_has_a_new_id(self):
         self.assertEqual(
@@ -145,7 +176,7 @@ class Main(unittest.TestCase):
     def test_few_requests(self):
         asked = []
         checks.check_environments(REPO, lambda path: asked.append(path) or GOOD.get(path))
-        self.assertEqual(len(asked), 4)
+        self.assertEqual(len(asked), 5)
 
     def test_limit_reached_is_a_failure(self):
         def refuse(path):

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Signs in to one cloud from a pull request, and checks where the plan identity's rights end.
+"""Signs in to one cloud as this repo's plan identity, and checks where its rights end.
 
   check_sign_in.py aws
   check_sign_in.py azure
   check_sign_in.py gcp
 
-Runs in GitHub Actions, in a pull request job that may ask for an OIDC token. It changes nothing: what
-it tries to write could not be written even with the right to. Job logs are public, so it prints its
-own words and short error codes, and never what a cloud answered.
+Runs in GitHub Actions on main, in the plan environment. It changes nothing: what it tries to write
+could not be written even with the right to. Job logs are public, so it prints its own words and short
+error codes, and never what a cloud answered.
 """
 
 import argparse
@@ -339,12 +339,12 @@ def prepare(needed, audience, env, send):
         raise Unusable("This is not one of the repos in subjects.json.")
     missing = [name for name in needed if not env.get(name)]
     if missing:
-        raise Unusable(f"Not set: {', '.join(missing)}. Fork and Dependabot pull requests get no secrets.")
+        raise Unusable(f"Not set: {', '.join(missing)}.")
 
     token = github_token(audience.format_map(env), env, send)
     subject = subject_of(token)
     if subject != SUBJECTS[repo]["plan"]:
-        # Names and ids of a public repo. A pull request job has the subject that ends in pull_request.
+        # Names and ids of a public repo. Only a job in the plan environment has the right one.
         raise Unusable(f"GitHub's subject is {re.sub('[^A-Za-z0-9@:/._-]', '?', subject)}, not the one in subjects.json.")
     return repo, next(name for name in SUBJECTS if name != repo), token
 

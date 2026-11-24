@@ -128,8 +128,13 @@ It checks every value, lists the names it will set, never shows a value, and ask
 
 ## Run it again later
 
-For example to pass `-var 'destroy_extra=["..."]'`. Pass every variable you ever set, each time: leaving one out undoes
-it. Do steps 2 to 4, then:
+`run.sh` carries out what has changed here since, for example in [subjects.json](../subjects.json). It shows the plan,
+asks, and stops if something would be deleted or replaced. Everything that a new subject or a new permission touches
+changes in place. It passes no variables and takes back what one of them had added, so first export every variable you
+ever set, as in `export TF_VAR_destroy_extra='["..."]'`.
+
+By hand, for example to pass `-var 'destroy_extra=["..."]'`: pass every variable you ever set, each time, because
+leaving one out undoes it. Do steps 2 to 4, then:
 
 ```bash
 B=$(aws s3api list-buckets --query "Buckets[?starts_with(Name, 'tfstate-')].Name | [0]" --output text)

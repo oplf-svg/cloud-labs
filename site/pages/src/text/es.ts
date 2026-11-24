@@ -45,7 +45,7 @@ export const es: SiteWords = {
   },
   score: {
     title: "La última ejecución, nube por nube",
-    lead: "Un pull request inicia sesión con una identidad de solo lectura e intenta lo que no debe poder hacer.",
+    lead: "Una identidad de solo lectura inicia sesión e intenta lo que no debe poder hacer.",
     cloud: "Nube", checks: "Comprobaciones", in: "Dejado entrar", refused: "Negado", empty: "Aún nada que abrir", wrong: "Respuestas equivocadas", answer: "Respuesta", open: "Abrir la ejecución",
     verdict: (checks, wrong) => `${checks} comprobaciones, ${wrong === 0 ? "ninguna respuesta equivocada" : wrong === 1 ? "1 respuesta equivocada" : `${wrong} respuestas equivocadas`}`,
     note: "«Aún nada que abrir» no es un acierto. Ningún proyecto ha guardado nada todavía, así que esa comprobación no puede probar quién podría abrirlo.",
@@ -84,7 +84,7 @@ export const es: SiteWords = {
       title: "Nadie tiene las llaves",
       text: ["GitHub inicia sesión en cada nube con un token que dura minutos. En GitHub no hay guardada ninguna contraseña ni clave de nube. Cada proyecto tiene tres identidades en cada nube, y ninguna puede hacer el trabajo de otra."],
       tiers: [
-        { name: "Plan", who: "Pull requests", can: "Mira, y no puede cambiar nada", state: "tested" },
+        { name: "Plan", who: "La rama principal, por sí sola", can: "Mira, y no puede cambiar nada", state: "tested" },
         { name: "Apply", who: "La rama principal, después de mi aprobación", can: "Despliega, pero no puede repartir permisos", state: "used" },
         { name: "Destroy", who: "Cada noche, sola", can: "Borra, y no puede crear nada", state: "tested" },
       ],

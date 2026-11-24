@@ -34,11 +34,12 @@ if args[0] == "init":
         remote.write_text(here.read_text()); pathlib.Path("terraform.tfstate.backup").write_text(here.read_text()); here.write_text("")
 elif args[0] == "plan":
     missing = conf["total"] - state()
-    if "-out=tfplan" in args: pathlib.Path("tfplan").write_text(json.dumps({"create": conf.get("create", missing), "delete": conf.get("delete", 0)}))
-    sys.exit(2 if missing or conf.get("outputs_only") else 0)
+    update = 0 if (box / "applied").exists() else conf.get("update", 0)
+    if "-out=tfplan" in args: pathlib.Path("tfplan").write_text(json.dumps({"create": conf.get("create", missing), "update": update, "delete": conf.get("delete", 0)}))
+    sys.exit(2 if missing or update or conf.get("outputs_only") else 0)
 elif args[0] == "show":
     p = json.loads(pathlib.Path("tfplan").read_text())
-    changes = [{"mode": "managed", "change": {"actions": ["create"]}}] * p["create"] + [{"mode": "managed", "change": {"actions": ["delete", "create"]}}] * p["delete"]
+    changes = [{"mode": "managed", "change": {"actions": a}} for a, n in ((["create"], "create"), (["update"], "update"), (["delete", "create"], "delete")) for _ in range(p[n])]
     print(json.dumps({"resource_changes": changes + [{"mode": "data", "change": {"actions": ["read"]}}]}))
 elif args[0] == "apply":
     (box / "applied").write_text("yes")
@@ -58,7 +59,7 @@ box, tool, args = pathlib.Path(os.environ["BOX"]), pathlib.Path(sys.argv[0]).nam
 conf = json.loads((box / "conf.json").read_text()); line = " ".join(args)
 print(tool, *args, file=open(box / "log", "a"))
 bucket, has_state = conf.get("bucket", ""), (box / "remote").exists()
-trusted = conf["subjects"] + conf.get("extra_subjects", [])
+trusted = (conf["subjects"] if (box / "applied").exists() else conf.get("subjects_before", conf["subjects"])) + conf.get("extra_subjects", [])
 def say(text=""): print(text)
 if tool == "aws":
     if "get-caller-identity" in line: say("111122223333" if "Account" in line else "arn:aws:iam::111122223333:user/admin")
@@ -113,7 +114,7 @@ class Run(unittest.TestCase):
 
     def prepare(self, cloud, github=0, **conf):
         total = conf.pop("total", EXPECTED[cloud])
-        (self.box / "conf.json").write_text(json.dumps({"cloud": cloud, "total": total, "subjects": SUBJECTS, **conf}))
+        (self.box / "conf.json").write_text(json.dumps({"cloud": cloud, "total": total, "subjects": SUBJECTS} | conf))
         self.tool(self.box / "bootstrap/scripts/github_checks.py", f"#!/usr/bin/env python3\nraise SystemExit({github})\n")
         return ["bash", str(self.box / "bootstrap/scripts/run.sh"), cloud], {
             **os.environ,
@@ -286,6 +287,38 @@ class Run(unittest.TestCase):
             (self.box / "remote").write_text(str(EXPECTED[cloud]))
             self.assertEqual(self.go(cloud, bucket="tfstate-0a1b2c3d", outputs_only=True), 0, self.out)
             self.assertTrue(self.applied())
+
+    def test_carries_out_a_later_change(self):
+        # As when plan came to trust another subject: everything is there already, and some of it changes in place.
+        before = [subject.replace(":environment:plan", ":pull_request") for subject in SUBJECTS]
+        self.assertEqual(len(set(before) - set(SUBJECTS)), 5)
+        for cloud in self.each_cloud():
+            (self.box / "remote").write_text(str(EXPECTED[cloud]))
+            later = {"bucket": "tfstate-0a1b2c3d", "subjects_before": before, "update": 5}
+            self.assertEqual(self.go(cloud, answer="no", **later), 1)
+            self.assertFalse(self.applied())
+            self.assertEqual(self.go(cloud, **later), 0, self.out)
+            self.assertIn("This will create 0 and change 5 resources, and delete none, in:", self.out)
+            self.assertTrue(self.applied())
+            self.assertIn("15 subjects match", self.out)
+            self.assertEqual((self.box / "remote").read_text(), str(EXPECTED[cloud]))
+
+    def test_a_replacement_stops_a_later_change(self):
+        for cloud in self.each_cloud():
+            (self.box / "remote").write_text(str(EXPECTED[cloud]))
+            self.assertEqual(self.go(cloud, bucket="tfstate-0a1b2c3d", delete=5), 1)
+            self.assertIn("The plan would delete or replace 5 resource(s). Nothing was changed.", self.out)
+            self.assertFalse(self.applied())
+
+    def test_a_subject_that_is_no_longer_in_the_list_is_not_accepted(self):
+        # What a pull request's job has. Nothing may trust it, not even next to the right ones.
+        old = SUBJECTS[0].partition(":environment:")[0] + ":pull_request"
+        for cloud in self.each_cloud():
+            (self.box / "remote").write_text(str(EXPECTED[cloud]))
+            for wrong in ({"extra_subjects": [old]}, {"subjects": [old, *SUBJECTS[1:]]}, {"subjects": SUBJECTS[1:]}):
+                self.assertEqual(self.go(cloud, bucket="tfstate-0a1b2c3d", **wrong), 1)
+                self.assertIn("differs from subjects.json", self.out)
+                self.assertNotIn("pbpaste", self.out)
 
     def test_bucket_without_state(self):
         for cloud in self.each_cloud():

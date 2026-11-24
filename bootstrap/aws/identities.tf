@@ -19,14 +19,12 @@ resource "aws_iam_role" "ci" {
       Principal = { Federated = local.oidc_provider_arn }
       Action    = "sts:AssumeRoleWithWebIdentity"
       Condition = {
-        StringEquals = merge(
-          {
-            "${local.issuer}:aud" = local.audience
-            "${local.issuer}:sub" = each.value.subject
-          },
+        StringEquals = {
+          "${local.issuer}:aud" = local.audience
+          "${local.issuer}:sub" = each.value.subject
           # A second check on top of the environment's own branch rule.
-          each.value.tier == "plan" ? {} : { "${local.issuer}:ref" = "refs/heads/main" },
-        )
+          "${local.issuer}:ref" = "refs/heads/main"
+        }
       }
     }]
   })

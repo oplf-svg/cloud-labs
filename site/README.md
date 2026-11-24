@@ -44,7 +44,8 @@ deploy, so there are few of them, and the budget alert is the last line.
 
 1. A pull request runs `checks.sh`. `site.yml` gives a pull request no access to a cloud.
 2. A person approves and merges it. [site.yml](../.github/workflows/site.yml) builds it once.
-3. A person approves both looks. They say what would change, in the stacks and in the files, and change nothing.
+3. It looks at both clouds, as an identity that can do nothing else, so nobody has to approve that. The looks say what
+   would change, in the stacks and in the files.
 4. A person approves the deploy to Azure, and then the one to AWS. A deploy stops unless it is the same run, the same
    plan, the same files and the same starting point that its look has shown. It also stops if the plan would delete or
    replace something, if there is a newer version on `main`, or if the last night run did not succeed.

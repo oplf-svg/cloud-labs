@@ -24,12 +24,19 @@ import deploy
 sys.path.insert(0, str(deploy.SCRIPTS))
 from test_check_sign_in import jwt
 
-ACCOUNT, BUCKET, ROLE = "111122223333", "tfstate-0a1b2c3d", "arn:aws:iam::111122223333:role/github-actions/gha-cloud-labs-apply"
-CLIENT_ID, SUBSCRIPTION, TENANT, STORAGE = (f"{digit * 8}-{digit * 4}-{digit * 4}-{digit * 4}-{digit * 12}" for digit in "1234")
+ACCOUNT, BUCKET = "111122223333", "tfstate-0a1b2c3d"
+CLIENT_ID, SUBSCRIPTION, TENANT, STORAGE, LOOKING_ID = (f"{digit * 8}-{digit * 4}-{digit * 4}-{digit * 4}-{digit * 12}" for digit in "12345")
 SECRET, SESSION, BEARER, UPLOAD_KEY, ASKING = "aws-secret-of-the-session", "aws-session-token", "azure-bearer-token", "azure-upload-key", "github-asking-token"
-TOKEN = jwt(deploy.SUBJECTS["cloud-labs"]["apply"])
+STORE_BEARER = "azure-storage-token"
+# Where Terraform keeps the state on Azure, from the stack itself.
+BACKEND = dict(re.findall(r'^ +(container_name|key) += "(.*)"$', (deploy.SITE / "infra/azure/versions.tf").read_text(), re.M))
+AZURE_STATE = f"{BACKEND['container_name']}/{BACKEND['key']}"
+# Each environment gives its jobs an identity of their own.
+ROLES = {tier: f"arn:aws:iam::{ACCOUNT}:role/github-actions/gha-cloud-labs-{tier}" for tier in ("plan", "apply")}
+CLIENTS = {"plan": LOOKING_ID, "apply": CLIENT_ID}
+TOKENS = {tier: jwt(deploy.SUBJECTS["cloud-labs"][tier]) for tier in ROLES}
 GITHUB = "github-token-of-the-job"
-HIDDEN = [ACCOUNT, BUCKET, ROLE, CLIENT_ID, SUBSCRIPTION, TENANT, STORAGE, SECRET, SESSION, BEARER, TOKEN, ASKING, GITHUB]
+HIDDEN = [ACCOUNT, BUCKET, *ROLES.values(), *CLIENTS.values(), SUBSCRIPTION, TENANT, STORAGE, SECRET, SESSION, BEARER, STORE_BEARER, *TOKENS.values(), ASKING, GITHUB]
 
 FILES = {
     "404.html": b"<h1>not here</h1>",
@@ -87,10 +94,12 @@ def headers(values):
 
 
 class World:
-    """GitHub, Terraform, both clouds and the public site, as they should answer."""
+    """GitHub, Terraform, both clouds and the public site, as they should answer. Whoever signs in as plan can only look."""
 
-    def __init__(self, cloud, plan=None, place=None, token=TOKEN, **changes):
+    def __init__(self, cloud, plan=None, place=None, token=None, **changes):
         self.cloud, self.token, self.changes, self.place = cloud, token, changes, place
+        # Which identity the job's environment stands for, and whether Azure has a state of the site.
+        self.tier, self.state = None, True
         self.plan = {"format_version": "1.2", "complete": True, "errored": False, "resource_changes": NEW[cloud] if plan is None else plan}
         self.ran, self.sent, self.asked, self.environments, self.slept = [], [], [], [], 0
         self.there, self.plans, self.registered, self.night = {}, [], "Registered", "success"
@@ -110,6 +119,8 @@ class World:
             assert command[1].endswith("install-terraform.sh")
             return done()
         if command[0] == "terraform":
+            if self.cloud == "azure" and command[2] == "init" and not self.init_on_azure(pathlib.Path(command[1].removeprefix("-chdir=")), command[3:]):
+                return done("", 1, f"Error: failed to lock azure state: unexpected status 403 AuthorizationPermissionMismatch in {STORAGE}")
             return done(self.terraform(command[2:], env))
         if command[0] == "aws":
             return done(json.dumps(self.aws(command[1:], env)))
@@ -117,6 +128,16 @@ class World:
         self.uploaded = {path.relative_to(env["APP_LOCATION"]).as_posix(): path.read_bytes() for path in pathlib.Path(env["APP_LOCATION"]).rglob("*") if path.is_file()}
         assert pathlib.Path(command[0]).read_bytes() == CLIENT
         return done("Finished. " + env["DEPLOYMENT_TOKEN"])
+
+    def init_on_azure(self, folder, arguments):
+        """Terraform's backend writes an empty state if there is none, and says no if it may not."""
+        remote, local = f"-backend-config=storage_account_name={STORAGE}" in arguments, (folder / "local_override.tf").exists()
+        assert remote != local and not (deploy.SITE / "infra" / "azure" / "local_override.tf").exists(), "either Azure keeps the state or this copy does"
+        assert local == (folder != deploy.SITE / "infra" / "azure") and (folder / "main.tf").read_text() == (deploy.SITE / "infra" / "azure" / "main.tf").read_text()
+        if remote and not self.state and self.tier == "plan":
+            return False
+        self.state = self.state or remote
+        return True
 
     def terraform(self, arguments, env):
         self.variables = {name: value for name, value in env.items() if name.startswith("TF_VAR_")}
@@ -134,9 +155,10 @@ class World:
         action = arguments[:2]
         given = dict(zip(arguments[2::2], arguments[3::2]))
         if action == ["sts", "assume-role-with-web-identity"]:
-            assert pathlib.Path(given["--web-identity-token"].removeprefix("file://")).read_text() == self.token and given["--role-arn"] == ROLE
+            assert pathlib.Path(given["--web-identity-token"].removeprefix("file://")).read_text() == TOKENS[self.tier] and given["--role-arn"] == ROLES[self.tier]
             return {"Credentials": {"AccessKeyId": "ASIAEXAMPLE", "SecretAccessKey": SECRET, "SessionToken": SESSION}}
         assert env["AWS_SESSION_TOKEN"] == SESSION
+        assert self.tier == "apply" or action[1].startswith("list-"), "plan may only look"
         if action == ["pricing-plan-manager", "list-subscriptions"]:
             assert given["--region"] == "us-east-1"
             return {"subscriptionSummaries": self.plans}
@@ -162,12 +184,20 @@ class World:
             if part in url:
                 return reply
         if url.startswith("https://token.example/"):
-            return 200, {}, json.dumps({"value": self.token}).encode()
+            return 200, {}, json.dumps({"value": self.token or TOKENS[self.tier]}).encode()
         if "login.microsoftonline.com" in url:
-            return 200, {}, json.dumps({"access_token": BEARER}).encode()
+            form = urllib.parse.parse_qs(body.decode())
+            assert form["client_id"] == [CLIENTS[self.tier]] and form["client_assertion"] == [TOKENS[self.tier]]
+            return 200, {}, json.dumps({"access_token": {"https://management.azure.com/.default": BEARER, "https://storage.azure.com/.default": STORE_BEARER}[form["scope"][0]]}).encode()
         if url == deploy.CLIENT:
             return 200, {}, CLIENT
+        if url == f"https://{STORAGE}.blob.core.windows.net/{AZURE_STATE}":
+            assert method == "HEAD" and headers["Authorization"] == f"Bearer {STORE_BEARER}"
+            return (200, {"Content-Length": "181"}, b"") if self.state else (404, {"x-ms-error-code": "BlobNotFound"}, b"")
         assert headers["Authorization"] == f"Bearer {BEARER}"
+        if self.tier == "plan":
+            # It may read its own resource group, and nothing here asks for that.
+            return 403, {}, b'{"error": {"code": "AuthorizationFailed"}}'
         if method == "GET" and path.endswith("/providers/Microsoft.Web"):
             return 200, {}, json.dumps({"registrationState": self.registered}).encode()
         if path.endswith("/providers/Microsoft.Web/register"):
@@ -219,6 +249,7 @@ class Deploy(unittest.TestCase):
         self.addCleanup(patch.stop)
 
     def go(self, step, world, fingerprint=None, files=FILES, **env):
+        world.tier = {"look": "plan", "apply": "apply"}[step]
         with tempfile.TemporaryDirectory() as folder:
             folder = pathlib.Path(folder)
             out = folder / "out"
@@ -239,9 +270,9 @@ class Deploy(unittest.TestCase):
                 "ACTIONS_ID_TOKEN_REQUEST_URL": "https://token.example/?x=1",
                 "ACTIONS_ID_TOKEN_REQUEST_TOKEN": ASKING,
                 "AWS_ACCOUNT_ID": ACCOUNT,
-                "AWS_ROLE_ARN": ROLE,
+                "AWS_ROLE_ARN": ROLES[world.tier],
                 "AWS_STATE_BUCKET": BUCKET,
-                "AZURE_CLIENT_ID": CLIENT_ID,
+                "AZURE_CLIENT_ID": CLIENTS[world.tier],
                 "AZURE_STATE_ACCOUNT": STORAGE,
                 "AZURE_SUBSCRIPTION_ID": SUBSCRIPTION,
                 "AZURE_TENANT_ID": TENANT,
@@ -289,11 +320,53 @@ class Deploy(unittest.TestCase):
                 self.assertEqual(f"The settings: staticwebapp.config.json, {hashlib.sha256(deploy.SETTINGS.read_bytes()).hexdigest()}\n" in output, cloud == "azure")
 
     def test_looking_does_not_turn_anything_on(self):
+        # Whoever looks may not ask whether they are on. They are where a site exists, and may not be where one is made:
+        # the first time, or again after someone deleted it by hand.
+        line = "     turn on static sites (Microsoft.Web) in the subscription"
+        adjusted = [change("azapi_resource.site", "update", before={"x": "a"}, after={"x": "b"})]
+        for registered in ("NotRegistered", "Registered"):
+            for plan, place, expected in ((None, None, [line + ", if they are off"]), (None, AZURE_PLACE, [line + ", if they are off"]), ([], AZURE_PLACE, []), (adjusted, AZURE_PLACE, [])):
+                world = World("azure", plan=plan, place=place)
+                world.registered = registered
+                code, output = self.go("look", world)
+                self.assertEqual((code, self.changed(world), world.registered), (0, [], registered), output)
+                self.assertEqual([text for text in output.splitlines() if "static sites" in text], expected)
+                self.assertFalse([path for _, path in world.sent if "Microsoft.Web" in path])
+        # Whoever deploys may ask, and says what is so.
+        mark = self.looked("azure")
+        for registered, expected in (("NotRegistered", [line]), ("Registered", [])):
+            world = World("azure")
+            world.registered = registered
+            code, output = self.go("apply", world, mark)
+            self.assertEqual((code, world.registered, [text for text in output.splitlines() if "static sites" in text]), (0, "Registered", expected), output)
+
+    def test_looking_at_azure_writes_no_state(self):
+        # With a state it is read where it is. Without one, or with an empty file, Terraform would write one.
         world = World("azure")
-        world.registered = "NotRegistered"
         code, output = self.go("look", world)
-        self.assertEqual((code, self.changed(world)), (0, []))
-        self.assertIn("     turn on static sites (Microsoft.Web) in the subscription\n", output)
+        mark = self.mark
+        self.assertEqual((code, world.state), (0, True), output)
+        self.assertTrue(any(f" init -no-color -lockfile=readonly -backend-config=storage_account_name={STORAGE}" in line for line in world.ran))
+        for reply in (None, (200, {"Content-Length": "0"}, b"")):
+            world = World("azure", **({"/site/terraform.tfstate": reply} if reply else {}))
+            world.state = False
+            code, output = self.go("look", world)
+            self.assertEqual((code, world.state, self.changed(world)), (0, False, []), output)
+            self.assertTrue(any(line.endswith(" init -no-color -lockfile=readonly") for line in world.ran))
+            # It comes to the same, so the deploy that follows does what was looked at, and writes the state.
+            self.assertEqual(self.mark, mark)
+            world = World("azure")
+            world.state = False
+            code, output = self.go("apply", world, mark)
+            self.assertEqual((code, world.state), (0, True), output)
+
+    def test_stops_if_azure_does_not_say_whether_there_is_a_state(self):
+        for reply in ((403, {"x-ms-error-code": "AuthorizationPermissionMismatch"}, b""), (404, {"x-ms-error-code": "ContainerNotFound"}, b""), (404, {}, b""), (500, {}, b""), (304, {}, b"")):
+            with self.subTest(reply):
+                world = World("azure", **{"/site/terraform.tfstate": reply})
+                code, output = self.go("look", world)
+                self.assertEqual((code, self.changed(world), any(line.startswith("terraform") for line in world.ran)), (1, [], False))
+                self.assertEqual(output.splitlines()[-1], f"Stopped. Azure refused to say whether there is a state: HTTP {reply[0]}.")
 
     def test_looking_says_what_would_change_for_visitors(self):
         expected = "The files: 1 new, 2 changed, 2 removed.\n     new robots.txt\n     changed files.txt\n     changed index.html\n     removed (a name that the site does not use)\n     removed old/index.html\n"
@@ -525,12 +598,19 @@ class Deploy(unittest.TestCase):
             self.assertEqual((code, world.ran, world.sent), (1, [], []))
             self.assertIn("Not deployed, because of the night run: last nightly destroy ended with failure.", output)
 
-    def test_only_the_identity_that_deploys_may_run_it(self):
-        for tier in ("plan", "destroy"):
-            for cloud in ("aws", "azure"):
-                world = World(cloud, token=jwt(deploy.SUBJECTS["cloud-labs"][tier]))
-                self.assertEqual(self.go("look", world)[1].splitlines()[-1], "Stopped. GitHub's subject is not the one that may deploy.")
-                self.assertEqual(world.ran, [])
+    def test_each_step_has_an_identity_of_its_own(self):
+        others = {"look": ("apply", "destroy"), "apply": ("plan", "destroy")}
+        for step, own in (("look", "plan"), ("apply", "apply")):
+            subjects = [deploy.SUBJECTS["cloud-labs"][tier] for tier in others[step]]
+            # A pull request's, one without an environment, and another repo's.
+            subjects += [subjects[0].partition(":environment:")[0] + end for end in (":pull_request", ":ref:refs/heads/main")] + [deploy.SUBJECTS["ai-ops-agent"][own]]
+            for subject in subjects:
+                for cloud in ("aws", "azure"):
+                    with self.subTest(step=step, subject=subject, cloud=cloud):
+                        world = World(cloud, token=jwt(subject))
+                        code, output = self.go(step, world, "0" * 64 if step == "apply" else None)
+                        self.assertEqual((code, output.splitlines()[-1]), (1, f"Stopped. GitHub's subject is not this repo's {own}."))
+                        self.assertEqual((world.ran, self.changed(world)), ([], []))
         self.assertIn("This is not the repo", self.go("look", World("aws"), GITHUB_REPOSITORY="oplf-svg/ai-ops-agent")[1])
         self.assertIn("Not set: AWS_ROLE_ARN.", self.go("look", World("aws"), AWS_ROLE_ARN="")[1])
 
@@ -551,7 +631,7 @@ class Deploy(unittest.TestCase):
         self.assertEqual(self.go("look", world)[1].splitlines()[-1], "Stopped. Azure refused the sign-in: AADSTS700213.")
 
     def test_an_error_is_shown_without_ids(self):
-        error = f"\x1b[31m╷\n│ Error: creating S3 Bucket (E2JWU1TLDA6YRS): https response error StatusCode: 403, api error AccessDenied: {ROLE} in {ACCOUNT}\n│ with {BUCKET} of My Company\n╵"
+        error = f"\x1b[31m╷\n│ Error: creating S3 Bucket (E2JWU1TLDA6YRS): https response error StatusCode: 403, api error AccessDenied: {ROLES['plan']} in {ACCOUNT}\n│ with {BUCKET} of My Company\n╵"
         code, output = self.go("look", World("aws", **{"terraform -chdir": ("", 1, error)}))
         self.assertEqual(output.splitlines()[-3:], ["Stopped. Terraform init failed.", "creating S3 Bucket", "AccessDenied, HTTP 403"])
         self.assertEqual(deploy.harmless('Error: Failed to get "0a1b" of tenant Contoso Ltd'), ["Failed to get"])
@@ -640,6 +720,25 @@ class Consistent(unittest.TestCase):
         self.assertEqual(config["routes"][-1], {"route": "/_astro/*", "headers": {"cache-control": deploy.KEEP}})
         closed = {rule["route"] for rule in config["routes"][:-1] if rule.get("statusCode") == 404}
         self.assertLessEqual({*deploy.SIGN_IN, "/.auth/*"}, closed)
+
+    def test_only_the_deploys_wait_for_an_approval(self):
+        text = (deploy.SITE.parent / ".github/workflows/site.yml").read_text()
+        jobs = dict(re.findall(r"^  ([a-z-]+):\n((?:(?:    .*)?\n)+)", text.partition("\njobs:\n")[2] + "\n", re.M))
+        self.assertEqual(set(jobs), {"build", "look-azure", "look-aws", "deploy-azure", "deploy-aws"})
+        self.assertNotIn("environment:", jobs.pop("build"))
+        for name, job in jobs.items():
+            step, _, cloud = name.partition("-")
+            self.assertEqual(re.findall("^    environment: (.*)$", job, re.M), ["plan" if step == "look" else "production"], name)
+            self.assertEqual(re.findall("deploy.py (.*)$", job, re.M), [f"{'look' if step == 'look' else 'apply'} {cloud}"], name)
+            # The secrets of its own cloud and no others.
+            used = re.findall(r"^      (\w+): \$\{\{ secrets\.(\w+) \}\}$", job, re.M)
+            self.assertEqual(sorted(used), sorted((secret, secret) for secret in deploy.CLOUDS[cloud][0]), name)
+            self.assertEqual(job.count("secrets."), len(used), name)
+        # A deploy does only what its own look has shown, and the two never wait for an approval together.
+        for cloud, needs in (("azure", "[look-azure, look-aws]"), ("aws", "[look-aws, deploy-azure]")):
+            self.assertIn(f"    if: ${{{{ !cancelled() && needs.look-{cloud}.result == 'success' }}}}\n    needs: {needs}\n", jobs[f"deploy-{cloud}"])
+            self.assertIn(f"      FINGERPRINT: ${{{{ needs.look-{cloud}.outputs.fingerprint }}}}\n", jobs[f"deploy-{cloud}"])
+            self.assertIn("    if: ${{ github.event_name != 'pull_request' }}\n    needs: build\n", jobs[f"look-{cloud}"])
 
     def test_the_night_run_knows_the_stack(self):
         sys.path.insert(0, str(deploy.SCRIPTS))
