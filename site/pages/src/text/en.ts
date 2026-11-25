@@ -94,7 +94,7 @@ export const en: SiteWords = {
       title: "Built for agents that attack together",
       text: ["Every agent is assumed to be wrong, tricked or hijacked, including mine. Agents outside are assumed to work together, to be patient, and to have read every page and every line of code here. So nothing may depend on an agent behaving well, or on a secret design."],
       rules: [
-        { rule: "One identity has one job and lasts minutes.", state: "proven" },
+        { rule: "One identity has one job.", state: "proven" },
         { rule: "What comes from outside is data. It is compared with what is allowed, and never read as an instruction.", state: "proven" },
         { rule: "The decisive step belongs to a person, in a place where no agent can write.", state: "planned" },
         { rule: "Limits count everyone together. Many callers that each stay small still meet one wall.", state: "planned" },

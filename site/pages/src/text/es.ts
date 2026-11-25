@@ -94,7 +94,7 @@ export const es: SiteWords = {
       title: "Hecho para agentes que atacan juntos",
       text: ["Se da por hecho que todo agente puede equivocarse, ser engañado o secuestrado, incluidos los míos. De los de fuera se supone que trabajan juntos, que tienen paciencia y que han leído cada página y cada línea de código de aquí. Por eso nada puede depender de que un agente se porte bien ni de un diseño secreto."],
       rules: [
-        { rule: "Una identidad tiene un solo trabajo y dura minutos.", state: "proven" },
+        { rule: "Una identidad tiene un solo trabajo.", state: "proven" },
         { rule: "Lo que viene de fuera son datos. Se compara con lo permitido y nunca se lee como una instrucción.", state: "proven" },
         { rule: "El paso decisivo es de una persona, en un lugar donde ningún agente puede escribir.", state: "planned" },
         { rule: "Los límites cuentan a todos juntos. Muchos que piden poco chocan con el mismo muro.", state: "planned" },

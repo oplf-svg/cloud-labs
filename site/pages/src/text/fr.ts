@@ -94,7 +94,7 @@ export const fr: SiteWords = {
       title: "Conçu pour des agents qui attaquent ensemble",
       text: ["Tout agent est supposé pouvoir se tromper, être manipulé ou détourné, y compris les miens. Ceux de l'extérieur sont supposés travailler ensemble, être patients et avoir lu chaque page et chaque ligne de code d'ici. Rien ne peut donc dépendre de la bonne conduite d'un agent, ni d'une conception secrète."],
       rules: [
-        { rule: "Une identité a un seul travail et dure quelques minutes.", state: "proven" },
+        { rule: "Une identité a un seul travail.", state: "proven" },
         { rule: "Ce qui vient de l'extérieur est une donnée. Elle est comparée à ce qui est permis, et jamais lue comme une instruction.", state: "proven" },
         { rule: "L'étape décisive revient à une personne, là où aucun agent ne peut écrire.", state: "planned" },
         { rule: "Les limites comptent tout le monde ensemble. Beaucoup de petites demandes rencontrent le même mur.", state: "planned" },
