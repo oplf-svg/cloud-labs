@@ -9,7 +9,7 @@ the same browser tests.
 | `pages` | The pages (Astro), and their words in `src/text` |
 | `packages/core` | The recorder's data, drawing and player, its look, and the real runs in `data/runs.json` |
 | `packages/recorder-react`, `packages/recorder-angular` | The two builds, each a custom element |
-| `scripts` | `import-runs.mjs` fetches the public logs of the sign-in test, `collect-builds.mjs` measures the builds |
+| `scripts` | `import-runs.mjs` fetches the public logs of the sign-in test, `collect-builds.mjs` measures the builds and puts the licences of what others wrote beside them (`third-party.mjs`) |
 | `e2e` | The browser tests |
 | `infra/aws`, `infra/azure` | One small Terraform stack per cloud |
 | `deploy` | How it is built, deployed and checked |
