@@ -86,7 +86,7 @@ export const en: SiteWords = {
       tiers: [
         { name: "Plan", who: "The main branch, by itself", can: "Looks, and cannot change anything", state: "tested" },
         { name: "Apply", who: "The main branch, after I approve", can: "Deploys, but cannot hand out rights", state: "used" },
-        { name: "Destroy", who: "Every night, on its own", can: "Deletes, and cannot create anything", state: "tested" },
+        { name: "Destroy", who: "The night run, without an approval", can: "Deletes, and cannot create anything", state: "tested" },
       ],
       tested: "Tested in public", used: "Used in public",
     },

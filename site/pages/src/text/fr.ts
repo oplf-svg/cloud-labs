@@ -86,7 +86,7 @@ export const fr: SiteWords = {
       tiers: [
         { name: "Plan", who: "La branche principale, d'elle-même", can: "Regarde, et ne peut rien changer", state: "tested" },
         { name: "Apply", who: "La branche principale, après mon approbation", can: "Déploie, mais ne peut pas distribuer de droits", state: "used" },
-        { name: "Destroy", who: "Chaque nuit, seule", can: "Supprime, et ne peut rien créer", state: "tested" },
+        { name: "Destroy", who: "L'exécution de nuit, sans approbation", can: "Supprime, et ne peut rien créer", state: "tested" },
       ],
       tested: "Testée en public", used: "Utilisée en public",
     },
