@@ -82,7 +82,7 @@ export const es: SiteWords = {
     lead: "La manera de construirlo es parte de lo que muestra.",
     keys: {
       title: "Nadie tiene las llaves",
-      text: ["GitHub inicia sesión en cada nube con un token que dura minutos. En GitHub no hay guardada ninguna contraseña ni clave de nube. Cada proyecto tiene tres identidades en cada nube, y ninguna puede hacer el trabajo de otra."],
+      text: ["GitHub inicia sesión en cada nube con un token que dura minutos. En GitHub no hay guardada ninguna contraseña ni clave de nube. Cada proyecto tiene sus propias identidades en cada nube, y ninguna puede hacer el trabajo de otra."],
       tiers: [
         { name: "Plan", who: "La rama principal, por sí sola", can: "Mira, y no puede cambiar nada", state: "tested" },
         { name: "Apply", who: "La rama principal, después de mi aprobación", can: "Despliega, pero no puede repartir permisos", state: "used" },

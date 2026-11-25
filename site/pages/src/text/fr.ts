@@ -82,7 +82,7 @@ export const fr: SiteWords = {
     lead: "La façon de construire fait partie de ce qui est montré.",
     keys: {
       title: "Personne ne détient les clés",
-      text: ["GitHub se connecte à chaque cloud avec un jeton qui dure quelques minutes. Aucun mot de passe ni aucune clé de cloud n'est stocké dans GitHub. Chaque projet a trois identités sur chaque cloud, et aucune ne peut faire le travail d'une autre."],
+      text: ["GitHub se connecte à chaque cloud avec un jeton qui dure quelques minutes. Aucun mot de passe ni aucune clé de cloud n'est stocké dans GitHub. Chaque projet a ses propres identités sur chaque cloud, et aucune ne peut faire le travail d'une autre."],
       tiers: [
         { name: "Plan", who: "La branche principale, d'elle-même", can: "Regarde, et ne peut rien changer", state: "tested" },
         { name: "Apply", who: "La branche principale, après mon approbation", can: "Déploie, mais ne peut pas distribuer de droits", state: "used" },

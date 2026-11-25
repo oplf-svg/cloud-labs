@@ -82,7 +82,7 @@ export const en: SiteWords = {
     lead: "The way this is built is part of what it shows.",
     keys: {
       title: "Nobody holds the keys",
-      text: ["GitHub signs in to each cloud with a token that lasts minutes. No cloud password or key is stored in GitHub. Each project has three identities on each cloud, and none of them can do another's job."],
+      text: ["GitHub signs in to each cloud with a token that lasts minutes. No cloud password or key is stored in GitHub. Each project has its own identities on each cloud, and none of them can do another's job."],
       tiers: [
         { name: "Plan", who: "The main branch, by itself", can: "Looks, and cannot change anything", state: "tested" },
         { name: "Apply", who: "The main branch, after I approve", can: "Deploys, but cannot hand out rights", state: "used" },
