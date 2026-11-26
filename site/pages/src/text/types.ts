@@ -53,22 +53,24 @@ export interface SiteWords {
     title: string; lead: string; builtWith: string;
     /** With {kb} and {ms}. */
     measured: string;
-    needsScript: string; failed: string; list: string; runs: string;
-    first: string; firstAbout: string; latest: string; latestAbout: (verdict: string, clouds: number) => string;
+    needsScript: string; failed: string; list: string;
+    /** The runs on file are named by their numbers and days: newer ones may have come since. */
+    runs: (first: number, last: number) => string; runName: (n: number, date: string) => string;
+    first: string; firstAbout: string; latest: string; latestAbout: (verdict: string, clouds: number, run: string) => string;
     example: string; exampleAbout: string; attack: string; attackAbout: string;
     player: Words;
     results: { in: string; refused: string; confirmed: string; empty: string; wrong: (got: string, wanted: string) => string };
     got: { allowed: string; denied: string; yes: string; "nothing there": string };
   };
   score: {
-    title: string; lead: string; cloud: string; checks: string; in: string; refused: string; empty: string; wrong: string; answer: string; open: string; note: string;
+    title: (run: string) => string; lead: string; cloud: string; checks: string; in: string; refused: string; empty: string; wrong: string; answer: string; open: string; note: string;
     verdict: (checks: number, wrong: number) => string;
   };
   doors: { title: string; lead: string; names: Record<Door, string>; lines: Record<Door, string>; count: (counts: Record<Status, number>) => string };
   notes: { title: string; lead: string; happened: string; silent: string; now: string; evidence: string; all: string };
   proof: {
     title: string; lead: string; filter: string; everyone: string; statuses: Record<Status, string>; limit: string; evidence: string; project: string; none: string;
-    runs: { title: string; lead: string; run: (n: number) => string; open: string };
+    runs: { lead: string; newer: (last: number) => string; list: string; run: (n: number) => string; open: string };
   };
   how: {
     title: string; lead: string;

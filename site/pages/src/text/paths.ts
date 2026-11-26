@@ -6,4 +6,8 @@ export const to = (lang: Lang, path = "/") => (lang === "en" ? path : `/${lang}$
 /** One page per language, for getStaticPaths. */
 export const everyLang = () => LANGS.map((lang) => ({ params: { lang: lang === "en" ? undefined : lang }, props: { lang } }));
 
-export const day = (lang: Lang, date: string) => new Intl.DateTimeFormat(lang, { dateStyle: "long", timeZone: "UTC" }).format(new Date(date));
+/** The day of a moment, in UTC wherever it is built, as each language writes it: French writes the first of a month as 1er. */
+export const day = (lang: Lang, date: string) => {
+  const said = new Intl.DateTimeFormat(lang, { dateStyle: "long", timeZone: "UTC" }).format(new Date(date));
+  return lang === "fr" ? said.replace(/^1 /, "1er ") : said;
+};
