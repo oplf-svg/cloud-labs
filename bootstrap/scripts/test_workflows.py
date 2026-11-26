@@ -136,6 +136,11 @@ class Workflows(unittest.TestCase):
             self.assertNotIn("toJSON(secrets)", self.texts[file])
 
 
+    def test_both_folders_of_tests_are_started(self):
+        # A test cannot notice that nobody starts it, so each folder looks for the line of the other too.
+        for folder in ("bootstrap/scripts", ".github/scripts"):
+            self.assertIn(f"\n      - run: python3 -m unittest discover --start-directory {folder}\n", self.texts["ci.yml"])
+
     def test_what_reads_the_private_terms_was_approved(self):
         """A pull request could otherwise change the check, and print the terms into a public log."""
         for file, name, job, _ in self.each_job():
