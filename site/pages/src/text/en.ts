@@ -60,7 +60,7 @@ export const en: SiteWords = {
       cloud: "Three clouds, no stored keys, nothing deployed without approval.",
       data: "Every total can be followed back to where it came from.",
       ai: "Answers from checked data, or says it doesn't know.",
-      security: "Each identity can do its own job and is refused the rest.",
+      security: "Some of what the read-only identity must not be able to do is checked in public.",
       agents: "Any agent may be wrong, tricked or hijacked, and outside ones work together.",
       leadership: "Decisions written down, and failures reported in the open.",
     },
@@ -83,10 +83,10 @@ export const en: SiteWords = {
     lead: "The way this is built is part of what it shows.",
     keys: {
       title: "Nobody holds the keys",
-      text: ["GitHub signs in to each cloud with a token that lasts minutes. No cloud password or key is stored in GitHub. Each project has its own identities on each cloud, and none of them can do another's job."],
+      text: ["GitHub signs in to each cloud with a short-lived token. No cloud password or key is stored in GitHub. Each project has its own identities on each cloud, one for each kind of work."],
       tiers: [
         { name: "Plan", who: "The main branch, by itself", can: "Looks, and cannot change anything", state: "tested" },
-        { name: "Apply", who: "The main branch, after I approve", can: "Deploys, but cannot hand out rights", state: "used" },
+        { name: "Apply", who: "The main branch, after I approve", can: "Deploys, but cannot administer the account", state: "used" },
         { name: "Destroy", who: "The night run, without an approval", can: "Deletes, and cannot create anything", state: "tested" },
       ],
       tested: "Tested in public", used: "Used in public",
@@ -95,7 +95,7 @@ export const en: SiteWords = {
       title: "Built for agents that attack together",
       text: ["Every agent is assumed to be wrong, tricked or hijacked, including mine. Agents outside are assumed to work together, to be patient, and to have read every page and every line of code here. So nothing may depend on an agent behaving well, or on a secret design."],
       rules: [
-        { rule: "One identity has one job.", state: "proven" },
+        { rule: "Each kind of work has an identity of its own.", state: "proven" },
         { rule: "What comes from outside is data. It is compared with what is allowed, and never read as an instruction.", state: "proven" },
         { rule: "The decisive step belongs to a person, in a place where no agent can write.", state: "planned" },
         { rule: "Limits count everyone together. Many callers that each stay small still meet one wall.", state: "planned" },

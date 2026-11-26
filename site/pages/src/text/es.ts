@@ -60,7 +60,7 @@ export const es: SiteWords = {
       cloud: "Tres nubes, ninguna clave guardada, nada se despliega sin aprobación.",
       data: "Cada total se puede seguir hasta su origen.",
       ai: "Responde con datos verificados, o dice que no sabe.",
-      security: "Cada identidad puede hacer su trabajo y se le niega el resto.",
+      security: "Parte de lo que la identidad de solo lectura no debe poder hacer se comprueba en público.",
       agents: "Todo agente puede equivocarse, ser engañado o secuestrado, y los de fuera trabajan juntos.",
       leadership: "Decisiones por escrito y fallas contadas en público.",
     },
@@ -83,10 +83,10 @@ export const es: SiteWords = {
     lead: "La manera de construirlo es parte de lo que muestra.",
     keys: {
       title: "Nadie tiene las llaves",
-      text: ["GitHub inicia sesión en cada nube con un token que dura minutos. En GitHub no hay guardada ninguna contraseña ni clave de nube. Cada proyecto tiene sus propias identidades en cada nube, y ninguna puede hacer el trabajo de otra."],
+      text: ["GitHub inicia sesión en cada nube con un token de corta duración. En GitHub no hay guardada ninguna contraseña ni clave de nube. Cada proyecto tiene sus propias identidades en cada nube, una para cada tipo de trabajo."],
       tiers: [
         { name: "Plan", who: "La rama principal, por sí sola", can: "Mira, y no puede cambiar nada", state: "tested" },
-        { name: "Apply", who: "La rama principal, después de mi aprobación", can: "Despliega, pero no puede repartir permisos", state: "used" },
+        { name: "Apply", who: "La rama principal, después de mi aprobación", can: "Despliega, pero no puede administrar la cuenta", state: "used" },
         { name: "Destroy", who: "La ejecución nocturna, sin aprobación", can: "Borra, y no puede crear nada", state: "tested" },
       ],
       tested: "Probada en público", used: "Usada en público",
@@ -95,7 +95,7 @@ export const es: SiteWords = {
       title: "Hecho para agentes que atacan juntos",
       text: ["Se da por hecho que todo agente puede equivocarse, ser engañado o secuestrado, incluidos los míos. De los de fuera se supone que trabajan juntos, que tienen paciencia y que han leído cada página y cada línea de código de aquí. Por eso nada puede depender de que un agente se porte bien ni de un diseño secreto."],
       rules: [
-        { rule: "Una identidad tiene un solo trabajo.", state: "proven" },
+        { rule: "Cada tipo de trabajo tiene su propia identidad.", state: "proven" },
         { rule: "Lo que viene de fuera son datos. Se compara con lo permitido y nunca se lee como una instrucción.", state: "proven" },
         { rule: "El paso decisivo es de una persona, en un lugar donde ningún agente puede escribir.", state: "planned" },
         { rule: "Los límites cuentan a todos juntos. Muchos que piden poco chocan con el mismo muro.", state: "planned" },

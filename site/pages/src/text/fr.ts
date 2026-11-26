@@ -60,7 +60,7 @@ export const fr: SiteWords = {
       cloud: "Trois clouds, aucune clé stockée, rien de déployé sans approbation.",
       data: "Chaque total peut être suivi jusqu'à son origine.",
       ai: "Répond à partir de données vérifiées, ou dit qu'elle ne sait pas.",
-      security: "Chaque identité fait son travail, et le reste lui est refusé.",
+      security: "Une partie de ce que l'identité en lecture seule ne doit pas pouvoir faire est contrôlée en public.",
       agents: "Tout agent peut se tromper, être manipulé ou détourné, et ceux de l'extérieur travaillent ensemble.",
       leadership: "Des décisions écrites, et des pannes racontées au grand jour.",
     },
@@ -83,10 +83,10 @@ export const fr: SiteWords = {
     lead: "La façon de construire fait partie de ce qui est montré.",
     keys: {
       title: "Personne ne détient les clés",
-      text: ["GitHub se connecte à chaque cloud avec un jeton qui dure quelques minutes. Aucun mot de passe ni aucune clé de cloud n'est stocké dans GitHub. Chaque projet a ses propres identités sur chaque cloud, et aucune ne peut faire le travail d'une autre."],
+      text: ["GitHub se connecte à chaque cloud avec un jeton de courte durée. Aucun mot de passe ni aucune clé de cloud n'est stocké dans GitHub. Chaque projet a ses propres identités sur chaque cloud, une par type de tâche."],
       tiers: [
         { name: "Plan", who: "La branche principale, d'elle-même", can: "Regarde, et ne peut rien changer", state: "tested" },
-        { name: "Apply", who: "La branche principale, après mon approbation", can: "Déploie, mais ne peut pas distribuer de droits", state: "used" },
+        { name: "Apply", who: "La branche principale, après mon approbation", can: "Déploie, mais ne peut pas administrer le compte", state: "used" },
         { name: "Destroy", who: "L'exécution de nuit, sans approbation", can: "Supprime, et ne peut rien créer", state: "tested" },
       ],
       tested: "Testée en public", used: "Utilisée en public",
@@ -95,7 +95,7 @@ export const fr: SiteWords = {
       title: "Conçu pour des agents qui attaquent ensemble",
       text: ["Tout agent est supposé pouvoir se tromper, être manipulé ou détourné, y compris les miens. Ceux de l'extérieur sont supposés travailler ensemble, être patients et avoir lu chaque page et chaque ligne de code d'ici. Rien ne peut donc dépendre de la bonne conduite d'un agent, ni d'une conception secrète."],
       rules: [
-        { rule: "Une identité a un seul travail.", state: "proven" },
+        { rule: "Chaque type de tâche a sa propre identité.", state: "proven" },
         { rule: "Ce qui vient de l'extérieur est une donnée. Elle est comparée à ce qui est permis, et jamais lue comme une instruction.", state: "proven" },
         { rule: "L'étape décisive revient à une personne, là où aucun agent ne peut écrire.", state: "planned" },
         { rule: "Les limites comptent tout le monde ensemble. Beaucoup de petites demandes rencontrent le même mur.", state: "planned" },

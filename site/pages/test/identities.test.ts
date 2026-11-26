@@ -5,9 +5,11 @@ import { LANGS, type Lang } from "../src/text/types.ts";
 
 // cloud-labs has one identity more on each cloud than the other projects, the one that reads costs. So no text counts them.
 const COUNTED = /(?<!\p{L})(?:two|three|four|five|dos|tres|cuatro|cinco|deux|trois|quatre|cinq|\d+)(?:\s+\p{L}+)?\s+(?:identities|identidades|identités)/iu;
-// How long something lasts, and what may be said of it: of GitHub's token alone, which is not one of the identities.
+// How long something lasts. On AWS a session may last an hour, and GitHub's token minutes.
 const LASTS = /(?<!\p{L})(?:lasts|lasting|lasted|last(?=\s+(?:for\s+)?(?:\p{L}+\s+)?(?:minutes?|hours?|days?))|valid\s+for|expires?|duran?|durar|durará|caducan?|dure(?:nt|ra)?|expirent?|expire)(?!\p{L})/iu;
-const TOKENS = ["GitHub signs in to each cloud with a token that lasts minutes", "GitHub inicia sesión en cada nube con un token que dura minutos", "GitHub se connecte à chaque cloud avec un jeton qui dure quelques minutes"];
+// The README of the bootstrap says where a right is wider than the job.
+const NEVER = /another['’]s job|el trabajo de otra|le travail d['’]une autre|refused the rest|se le niega el resto|le reste lui est refusé|hand out|repartir permisos|distribuer de droits|One identity has one job|tiene un solo trabajo|a un seul travail/iu;
+const TEXTS = ["en", "es", "fr", "claims", "notes"];
 const read = (path: string) => readFileSync(new URL(`../../${path}`, import.meta.url), "utf8");
 
 it.each(["en", "es", "fr"])("says whose the identities are (%s)", (lang) => {
@@ -18,9 +20,16 @@ it.each(["pages/src/text/en.ts", "pages/src/text/es.ts", "pages/src/text/fr.ts",
   expect(read(path)).not.toMatch(COUNTED);
 });
 
-it("says how long something lasts of GitHub's token only", () => {
-  const texts = ["en", "es", "fr", "claims", "notes"].map((name) => read(`pages/src/text/${name}.ts`)).join("\n");
-  expect(texts.split(/[.":;\n]/).map((sentence) => sentence.trim()).filter((sentence) => LASTS.test(sentence))).toEqual(TOKENS);
+it.each(TEXTS)("says of nothing how long it lasts (%s)", (name) => {
+  expect(read(`pages/src/text/${name}.ts`)).not.toMatch(LASTS);
+});
+
+it.each(TEXTS)("does not say that a right is no wider than the job (%s)", (name) => {
+  expect(read(`pages/src/text/${name}.ts`)).not.toMatch(NEVER);
+});
+
+it.each(["none of them can do another's job", "ninguna puede hacer el trabajo de otra", "aucune ne peut faire le travail d’une autre", "is refused the rest", "se le niega el resto", "le reste lui est refusé", "cannot hand out rights", "no puede repartir permisos", "ne peut pas distribuer de droits", "One identity has one job", "Una identidad tiene un solo trabajo", "Une identité a un seul travail"])("would notice: %s", (said) => {
+  expect(said).toMatch(NEVER);
 });
 
 it.each(["One identity has one job and lasts minutes", "It lasts minutes", "Identities last minutes", "they last for some hours", "valid for minutes", "expires after an hour", "dura minutos una identidad", "caduca en minutos", "Une identité a un seul travail et dure quelques minutes", "elle dure une heure"])("would notice: %s", (said) => {
