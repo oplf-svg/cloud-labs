@@ -27,7 +27,7 @@ test, and no text may hold a name, an account or an address. `npm test` checks w
 
 | | AWS | Azure |
 |---|---|---|
-| Served by | CloudFront, from a private S3 bucket in London | Static Web Apps, settings in West Europe |
+| Served by | CloudFront, from a private S3 bucket in London | Static Web Apps, settings in Central US |
 | Plan | Free flat-rate plan: no overage charges | Free plan: overage cannot be bought |
 | When the allowance is used up | AWS may slow it down | It stops until the next month |
 | A flood of made-up addresses | [edge.js](infra/aws/edge.js) turns them all into one, which CloudFront keeps, so the storage is asked about it once a day per place | Counts towards the allowance |

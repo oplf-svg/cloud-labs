@@ -85,7 +85,7 @@ def change(address, *actions, before=None, after=None, unknown=None):
 
 NEW = {
     "aws": [change(address, "create", after={"name": address}, unknown={"id": True}) for address in sorted(deploy.STACK["aws"])],
-    "azure": [change("azapi_resource.site", "create", after={"location": "westeurope"}, unknown={"output": True})],
+    "azure": [change("azapi_resource.site", "create", after={"location": "centralus"}, unknown={"output": True})],
 }
 SWITCHED_ON = change("aws_cloudfront_distribution.site", "update", before={"enabled": False, "etag": "A"}, after={"enabled": True}, unknown={"etag": True, "origin": [{}]})
 
