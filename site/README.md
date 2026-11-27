@@ -9,7 +9,7 @@ the same browser tests.
 | `pages` | The pages (Astro), and their words in `src/text` |
 | `packages/core` | The recorder's data, drawing and player, its look, and the real runs in `data/runs.json` |
 | `packages/recorder-react`, `packages/recorder-angular` | The two builds, each a custom element |
-| `scripts` | `import-runs.mjs` fetches the public logs of the sign-in test, `collect-builds.mjs` measures the builds |
+| `scripts` | `import-runs.mjs` fetches the public logs of the sign-in test, `collect-builds.mjs` measures the builds and puts the licences of what others wrote beside them (`third-party.mjs`) |
 | `e2e` | The browser tests |
 | `infra/aws`, `infra/azure` | One small Terraform stack per cloud |
 | `deploy` | How it is built, deployed and checked |
@@ -52,8 +52,8 @@ deploy, so there are few of them, and the budget alert is the last line.
 5. It then asks for every address as a visitor would, and fails unless the bytes are those that were built, the security
    headers are there, no cookie is set, there is nothing to sign in to, and an address that does not exist gets a 404.
 
-Each morning the looks run by themselves, and nothing else. They end red if what is live is not what `main` says, because
-somebody has changed it or a deploy is still to be approved.
+GitHub's clock is set to start a build and the looks at 06:41 UTC, and no deploy. It may start them late or not at all. The
+looks end red if what is live is not what `main` says, because somebody has changed it or a deploy is still to be approved.
 
 [deploy.py](deploy/deploy.py) does this, and [its tests](deploy/test_deploy.py) run against stand-ins for both clouds.
 The very first deploy has to wait until the night run has succeeded once on its schedule.

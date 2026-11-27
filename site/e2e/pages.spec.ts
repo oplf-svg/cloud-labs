@@ -42,6 +42,15 @@ test("every link inside the site leads somewhere", async ({ page, request }) => 
   expect(seen.size).toBe(21);
 });
 
+test("serves the licences of what others wrote beside the builds", async ({ request }) => {
+  const served = await request.get("/builds/third-party.txt");
+  expect(served.status()).toBe(200);
+  expect(served.headers()["content-type"]).toMatch(/^text\/plain/);
+  const text = await served.text();
+  for (const name of ["react", "react-dom", "@angular/core", "rxjs", "@fontsource-variable/atkinson-hyperlegible-next"]) expect(text).toMatch(new RegExp(`^${name} \\d+\\.\\d+\\.\\d+$`, "m"));
+  for (const build of ["react", "angular"]) expect((await (await request.get(`/builds/${build}/main.js`)).text()).split("\n")[0]).toBe("/*! Licences of what others wrote: /builds/third-party.txt */");
+});
+
 test("shows the claims behind one door", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("link", { name: /^Security/ }).click();

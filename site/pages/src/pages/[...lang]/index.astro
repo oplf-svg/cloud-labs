@@ -8,7 +8,7 @@ import sizes from "../../data/builds.json";
 import Page from "../../layouts/Page.astro";
 import { CLAIMS } from "../../text/claims.ts";
 import { everyLang, to } from "../../text/paths.ts";
-import { LATEST, WORDS, recorderData, wrongIn } from "../../text/recordings.ts";
+import { LATEST, WORDS, recorderData, runsName, scoreTitle, wrongIn } from "../../text/recordings.ts";
 import { DOORS, STATUSES, type Door, type Lang, type Status } from "../../text/types.ts";
 
 export const getStaticPaths = everyLang;
@@ -64,12 +64,12 @@ const data = JSON.stringify(all).replaceAll("<", "\\u003c");
       <details>
         <summary>{recorder.list}: {recorder.latest}</summary>
         <CheckList lang={lang} run={LATEST} />
-        <p class="after"><a href={`${to(lang, "/proof/")}#runs`}>{recorder.runs}</a></p>
+        <p class="after"><a href={`${to(lang, "/proof/")}#runs`}>{runsName(lang)}</a></p>
       </details>
     </div>
   </Part>
 
-  <Part id="score-title" title={score.title} lead={score.lead}>
+  <Part id="score-title" title={scoreTitle(lang)} lead={score.lead}>
     <div>
       <table class="stack">
         <thead>

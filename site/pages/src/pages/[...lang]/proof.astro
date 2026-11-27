@@ -4,7 +4,7 @@ import CheckList from "../../components/CheckList.astro";
 import Page from "../../layouts/Page.astro";
 import { CLAIMS } from "../../text/claims.ts";
 import { day, everyLang } from "../../text/paths.ts";
-import { RUNS, WORDS, wrongIn } from "../../text/recordings.ts";
+import { ALL_RUNS, RUNS, WORDS, newerRuns, runsName, wrongIn } from "../../text/recordings.ts";
 import { DOORS, STATUSES, type Lang } from "../../text/types.ts";
 
 export const getStaticPaths = everyLang;
@@ -43,8 +43,8 @@ const { proof, doors, score } = words;
     ))}
   </div>
   <section class="wide" id="runs" aria-labelledby="runs-title">
-    <h2 id="runs-title">{proof.runs.title}</h2>
-    <p class="lead after">{proof.runs.lead}</p>
+    <h2 id="runs-title">{runsName(lang)}</h2>
+    <p class="lead after">{proof.runs.lead} {newerRuns(lang)} <a href={ALL_RUNS}>{proof.runs.list}</a></p>
     {RUNS.map((run) => {
       const wrong = wrongIn(run.checks);
       return (

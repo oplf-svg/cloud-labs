@@ -3,6 +3,7 @@ import file from "../../../packages/core/data/runs.json";
 import { en } from "./en.ts";
 import { es } from "./es.ts";
 import { fr } from "./fr.ts";
+import { day as dayOf } from "./paths.ts";
 import type { Lang, SiteWords, Text } from "./types.ts";
 
 export const WORDS: Record<Lang, SiteWords> = { en, es, fr };
@@ -15,6 +16,18 @@ export const FIRST = RUNS[0]!;
 export const LATEST = RUNS[RUNS.length - 1]!;
 
 export const wrongIn = (checks: Check[]) => checks.filter((check) => !check.ok).length;
+
+// The runs on file are named by their numbers and days, because newer ones may have come since.
+export const runName = (lang: Lang, run: Run = LATEST) => WORDS[lang].recorder.runName(run.number, dayOf(lang, run.date));
+export const runsName = (lang: Lang, runs: Run[] = RUNS) => WORDS[lang].recorder.runs(runs[0]!.number, runs[runs.length - 1]!.number);
+export const newerRuns = (lang: Lang, runs: Run[] = RUNS) => WORDS[lang].proof.runs.newer(runs[runs.length - 1]!.number);
+export const aboutLatest = (lang: Lang, run: Run = LATEST) => {
+  const words = WORDS[lang];
+  return words.recorder.latestAbout(words.score.verdict(run.checks.length, wrongIn(run.checks)), run.lanes.length, runName(lang, run));
+};
+export const scoreTitle = (lang: Lang, run: Run = LATEST) => WORDS[lang].score.title(runName(lang, run));
+/** Every run of the sign-in test, for as long as GitHub keeps them. */
+export const ALL_RUNS = `https://github.com/${file.repo}/actions/workflows/${file.workflow}`;
 
 export function toMark(check: Check, words: SiteWords): Mark {
   const { results, got } = words.recorder;
@@ -103,11 +116,11 @@ function example(id: string, title: string, about: string, hour: number, lanes: 
 
 export function recorderData(lang: Lang): Data {
   const words = WORDS[lang];
-  const { latestAbout, latest, first, firstAbout, player, example: day, exampleAbout, attack, attackAbout } = words.recorder;
+  const { latest, first, firstAbout, player, example: day, exampleAbout, attack, attackAbout } = words.recorder;
   return {
     words: player,
     recordings: [
-      fromRun(LATEST, "latest", latest, latestAbout(words.score.verdict(LATEST.checks.length, wrongIn(LATEST.checks)), LATEST.lanes.length), words),
+      fromRun(LATEST, "latest", latest, aboutLatest(lang), words),
       fromRun(FIRST, "first", first, firstAbout, words),
       example("day", day, exampleAbout, 9, LANES, DAY, UNSEEN, lang),
       example("attack", attack, attackAbout, 2, ATTACKERS, NIGHT, UNNOTICED, lang),
