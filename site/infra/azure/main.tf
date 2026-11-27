@@ -5,7 +5,7 @@ resource "azapi_resource" "site" {
   parent_id = "/subscriptions/${var.subscription_id}/resourceGroups/rg-cloud-labs"
 
   # Where Azure keeps the settings. There is no London to choose, and the files are served from everywhere.
-  location = "westeurope"
+  location = "centralus"
 
   body = {
     sku = {
