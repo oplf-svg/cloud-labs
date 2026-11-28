@@ -1,5 +1,5 @@
 {
-  "trailingSlash": "always",
+  "trailingSlash": "auto",
   "globalHeaders": {
     "cache-control": "public, max-age=0, must-revalidate",
     "referrer-policy": "strict-origin-when-cross-origin",
