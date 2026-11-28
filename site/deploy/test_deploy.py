@@ -784,6 +784,8 @@ class Consistent(unittest.TestCase):
             self.assertTrue(fine(config["globalHeaders"][header].lower()), header)
         self.assertEqual(config["responseOverrides"], {"404": {"rewrite": "/404.html"}})
         self.assertEqual(config["mimeTypes"], deploy.TYPES)
+        # "always" sends a file to the same address with a slash first, and the check of what visitors get counts that as wrong.
+        self.assertEqual(config["trailingSlash"], "auto")
         self.assertEqual(config["routes"][-1], {"route": "/_astro/*", "headers": {"cache-control": deploy.KEEP}})
         closed = {rule["route"] for rule in config["routes"][:-1] if rule.get("statusCode") == 404}
         self.assertLessEqual({*deploy.SIGN_IN, "/.auth/*"}, closed)
